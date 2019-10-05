@@ -1,6 +1,18 @@
 use std::collections::HashMap;
 
+use rand::*;
+
 use quicksilver::prelude::*;
+
+
+const TEXT_COLOR: Color = Color::WHITE;
+const BACKGROUND_COLOR: Color = Color::BLACK;
+
+const MAP_WIDTH: usize = 20;
+const MAP_HEIGHT: usize = 15;
+
+const MAP_DRAW_X_OFFSET: usize  = 50;
+const MAP_DRAW_Y_OFFSET: usize  = 120;
 
 
 #[derive(Clone, Debug, PartialEq)]
@@ -24,6 +36,8 @@ type EntityId = usize;
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Trap {
     Berserk,
+    Kill,
+    Bump,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -135,14 +149,6 @@ impl HasHp for Entity {
 
 type Map = Vec<Tile>;
 
-const TEXT_COLOR: Color = Color::WHITE;
-const BACKGROUND_COLOR: Color = Color::BLACK;
-
-const MAP_WIDTH: usize = 20;
-const MAP_HEIGHT: usize = 15;
-
-const MAP_DRAW_X_OFFSET: usize  = 50;
-const MAP_DRAW_Y_OFFSET: usize  = 120;
 
 fn generate_map(size: Vector) -> Vec<Tile> {
     let width = size.x as usize;
@@ -176,6 +182,10 @@ fn occupied_tile(pos: Vector, entities: &Vec<Entity>) -> Option<Entity> {
     return entities.iter().find(|entity| entity.pos == pos).map(|entity| entity.clone());
 }
 
+fn trap_tile(pos: Vector, entities: &Vec<Entity>) -> Option<Entity> {
+    return entities.iter().find(|entity| entity.typ.is_trap() && entity.pos == pos).map(|entity| entity.clone());
+}
+
 fn clamp(min: f32, max: f32, value: f32) -> f32 {
     let result: f32;
 
@@ -199,6 +209,15 @@ struct Entity {
 }
 
 impl Entity {
+    fn trap(pos: Vector, trap: Trap) -> Entity {
+        Entity {
+            pos: pos,
+            glyph: '0',
+            color: Color::GREEN,
+            typ: EntityType::trap(trap),
+        }
+    }
+
     fn goblin(pos: Vector) -> Entity {
         Entity {
             pos: pos,
@@ -210,8 +229,9 @@ impl Entity {
 }
 
 fn generate_entities(entities: &mut Vec<Entity>) {
-    entities.push(Entity::goblin(Vector::new(9, 6)));
-    entities.push(Entity::goblin(Vector::new(2, 4)));
+    entities.push(Entity::goblin(Vector::new(9, 10)));
+    entities.push(Entity::goblin(Vector::new(2, 14)));
+    entities.push(Entity::trap(Vector::new(6, 6), Trap::Bump)); 
 }
 
 struct Game {
@@ -344,6 +364,8 @@ impl State for Game {
                     window.close();
                 }
 
+                resolve_traps(&mut self.entities, &self.map);
+
                 if self.entities[self.player_id].hp() <= 0 {
                     self.game_state = GameState::Lost;
                 }
@@ -413,7 +435,7 @@ impl State for Game {
             self.char_map.execute(|char_map| {
                 draw_char(&char_map, window, pos, entity.glyph);
                 return Ok(());
-            });
+            }).unwrap();
         }
 
         let player = &self.entities[self.player_id];
@@ -506,6 +528,16 @@ fn update_monsters(game: &mut Game, window: &mut Window) {
     //let mut remove_indices: Vec<usize> = Vec::new();
 }
 
+fn attempt_move(pos: Vector, offset: Vector, map: &Map) -> Vector {
+    let mut new_pos = pos + offset;
+
+    if blocked_tile(new_pos, map) {
+        new_pos = pos;
+    }
+
+    return new_pos;
+}
+
 fn update_player(game: &mut Game, window: &mut Window) -> bool {
     use ButtonState::*;
 
@@ -536,6 +568,39 @@ fn update_player(game: &mut Game, window: &mut Window) -> bool {
     }
 
     return took_turn;
+}
+
+fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
+    let mut rng = thread_rng();
+    let entities_clone = entities.clone();
+
+    for entity in entities.iter_mut().filter(|ent| ent.typ.is_player() || ent.typ.is_monster()) {
+        if let Some(trap_entity) = trap_tile(entity.pos, &entities_clone) {
+            match trap_entity.typ {
+                EntityType::Trap(trap) => {
+                    match trap {
+                        Trap::Berserk => {
+                        },
+
+                        Trap::Kill => {
+                        },
+
+                        Trap::Bump => {
+                            let pos = entity.pos;
+                            let x_offset = rng.gen_range(-1, 1);
+                            let y_offset = rng.gen_range(-1, 1);
+                            entity.pos =
+                                attempt_move(pos,
+                                             Vector::new(x_offset, y_offset),
+                                             &map);
+                        }
+                    }
+                },
+
+                _ => panic!("Unreachable?"),
+            }
+        }
+    }
 }
 
 // Draw Function
