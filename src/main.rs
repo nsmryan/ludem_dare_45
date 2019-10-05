@@ -1,6 +1,7 @@
+use std::collections::HashMap;
+
 use quicksilver::prelude::*;
 
-use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq)]
 enum GameState {
@@ -163,7 +164,8 @@ fn generate_map(size: Vector) -> Vec<Tile> {
             map.push(tile);
         }
     }
-    map
+
+    return map;
 }
 
 fn blocked_tile(pos: Vector, map: &Map) -> bool {
@@ -218,7 +220,7 @@ struct Game {
     mononoki_font_info: Asset<Image>,
     square_font_info: Asset<Image>,
     lost_game_message: Asset<Image>,
-    char_map: HashMap<u32, Image>,
+    char_map: Asset<HashMap<u32, Image>>,
     inventory: Asset<Image>,
     map_size: Vector,
     map: Map,
@@ -240,18 +242,19 @@ impl State for Game {
         }));
 
         let font_image = "rexpaint16x16.png";
-        let mut char_map = HashMap::new();
-        let char_size = Vector::new(16, 16);
-        Image::load(font_image).map(|image| {
+        let char_map = Asset::new(Image::load(font_image).and_then(|image| {
+            let mut char_map = HashMap::new();
+            let char_size = Vector::new(16, 16);
             for char_ix in 0..256 {
                 let char_x = char_ix % 16;
                 let char_y = char_ix / 16;
                 let char_pos = Vector::new(char_x * 16, char_y * 16);
-                char_map.insert(char_ix, image.subimage(Rectangle::new(char_pos, char_size)));
+                char_map.insert(char_ix,
+                                image.subimage(Rectangle::new(char_pos, char_size)));
             }
-        }).map_err(|err| {
-            panic!("Error loading font image: {}", err);
-        }).poll().unwrap();
+
+            return Ok(char_map);
+        }));
 
         let lost_game_message = Asset::new(Font::load(font_mononoki).and_then(|font| {
             font.render("You Lose!", &FontStyle::new(72.0, TEXT_COLOR))
@@ -397,14 +400,20 @@ impl State for Game {
         for tile in self.map.iter() {
             let pos_px = tile.pos.times(tile_size_px);
             let pos = offset_px + pos_px;
-            draw_char(&self.char_map, window, pos, tile.glyph);
+            self.char_map.execute(|char_map| {
+                draw_char(&char_map, window, pos, tile.glyph);
+                return Ok(());
+            });
         }
 
         // Draw entities
         for entity in self.entities.iter() {
             let pos_px = entity.pos.times(tile_size_px);
             let pos = offset_px + pos_px;
-            draw_char(&self.char_map, window, pos, entity.glyph);
+            self.char_map.execute(|char_map| {
+                draw_char(&char_map, window, pos, entity.glyph);
+                return Ok(());
+            });
         }
 
         let player = &self.entities[self.player_id];
@@ -482,17 +491,19 @@ fn update_monsters(game: &mut Game, window: &mut Window) {
     for attack in attacks {
         let typ = &mut game.entities[attack.1].typ;
         match typ {
-            EntityType::Player(mut player) => {
+            EntityType::Player(player) => {
                 typ.lose_hp(1);
             },
 
-            EntityType::Monster(mut monster) => {
+            EntityType::Monster(monster) => {
                 typ.lose_hp(1);
             },
 
             _ => { },
         }
     }
+
+    //let mut remove_indices: Vec<usize> = Vec::new();
 }
 
 fn update_player(game: &mut Game, window: &mut Window) -> bool {
@@ -530,6 +541,9 @@ fn update_player(game: &mut Game, window: &mut Window) -> bool {
 // Draw Function
 fn draw_char(char_map: &HashMap<u32, Image>, window: &mut Window, pos: Vector, chr: char) {
     let char_ix = chr as u32;
+    let char_x = char_ix % 16;
+    let char_y = char_ix / 16;
+    //let char_pos = Vector::new(char_x * 16, char_y * 16);
     let rect = Rectangle::new(pos, Vector::new(16, 16));
     window.draw(&rect, Img(&char_map[&char_ix]));
 }
