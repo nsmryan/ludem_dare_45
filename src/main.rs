@@ -9,6 +9,9 @@ struct Tile {
     color: Color,
 }
 
+const TEXT_COLOR: Color = Color::WHITE;
+const BACKGROUND_COLOR: Color = Color::BLACK;
+
 fn generate_map(size: Vector) -> Vec<Tile> {
     let width = size.x as usize;
     let height = size.y as usize;
@@ -17,8 +20,8 @@ fn generate_map(size: Vector) -> Vec<Tile> {
         for y in 0..height {
             let mut tile = Tile {
                 pos: Vector::new(x as f32, y as f32),
-                glyph: '.',
-                color: Color::BLACK,
+                glyph: ' ',
+                color: TEXT_COLOR,
             };
 
             if x == 0 || x == width - 1 || y == 0 || y == height - 1 {
@@ -93,27 +96,27 @@ impl State for Game {
         let font_mononoki = "mononoki-Regular.ttf";
 
         let title = Asset::new(Font::load(font_mononoki).and_then(|font| {
-            font.render("Quicksilver Roguelike", &FontStyle::new(72.0, Color::BLACK))
+            font.render("Ludem Dare 45", &FontStyle::new(72.0, TEXT_COLOR))
         }));
 
         let mononoki_font_info = Asset::new(Font::load(font_mononoki).and_then(|font| {
             font.render(
-                "Mononoki font by Matthias Tellen, terms: SIL Open Font License 1.1",
-                &FontStyle::new(20.0, Color::BLACK),
+                "",
+                &FontStyle::new(20.0, TEXT_COLOR),
             )
         }));
 
         let square_font_info = Asset::new(Font::load(font_mononoki).and_then(move |font| {
             font.render(
-                "Square font by Wouter Van Oortmerssen, terms: CC BY 3.0",
-                &FontStyle::new(20.0, Color::BLACK),
+                "",
+                &FontStyle::new(20.0, TEXT_COLOR),
             )
         }));
 
         let inventory = Asset::new(Font::load(font_mononoki).and_then(move |font| {
             font.render(
                 "Inventory:\n[A] Sword\n[B] Shield\n[C] Darts",
-                &FontStyle::new(20.0, Color::BLACK),
+                &FontStyle::new(20.0, TEXT_COLOR),
             )
         }));
 
@@ -124,7 +127,7 @@ impl State for Game {
         entities.push(Entity {
             pos: Vector::new(5, 3),
             glyph: '@',
-            color: Color::BLUE,
+            color: Color::ORANGE,
             hp: 3,
             max_hp: 5,
         });
@@ -136,7 +139,7 @@ impl State for Game {
         let tile_size_px = Vector::new(24, 24);
         let tileset = Asset::new(Font::load(font_square).and_then(move |text| {
             let tiles = text
-                .render(game_glyphs, &FontStyle::new(tile_size_px.y, Color::WHITE))
+                .render(game_glyphs, &FontStyle::new(tile_size_px.y, TEXT_COLOR))
                 .expect("Could not render the font tileset.");
             let mut tileset = HashMap::new();
             for (index, glyph) in game_glyphs.chars().enumerate() {
@@ -186,7 +189,7 @@ impl State for Game {
 
     /// Draw stuff on the screen
     fn draw(&mut self, window: &mut Window) -> Result<()> {
-        window.clear(Color::WHITE)?;
+        window.clear(BACKGROUND_COLOR)?;
 
         // Draw the game title
         self.title.execute(|image| {
@@ -301,5 +304,5 @@ fn main() {
         scale: quicksilver::graphics::ImageScaleStrategy::Blur,
         ..Default::default()
     };
-    run::<Game>("Quicksilver Roguelike", Vector::new(800, 600), settings);
+    run::<Game>("Ludem Dare 45", Vector::new(800, 600), settings);
 }
