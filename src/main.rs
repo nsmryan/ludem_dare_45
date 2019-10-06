@@ -8,7 +8,6 @@ use quicksilver::prelude::*;
 
 // TODO 
 //      map generation- placement of enemies and traps
-//      another monster with different movement
 //      animations between frames
 //      add legend for currently avaiable tiles
 //
@@ -27,8 +26,8 @@ const MAP_HEIGHT: usize = 10;
 
 const MAP_DRAW_X_OFFSET: usize  = 200;
 const MAP_DRAW_Y_OFFSET: usize  = 120;
-const TILE_WIDTH_PX: u32 = 40; // 24;
-const TILE_HEIGHT_PX: u32 = 40; // 24;
+const TILE_WIDTH_PX: u32 = 40;
+const TILE_HEIGHT_PX: u32 = 40;
 
 static RED: Color = Color { r: 161.0 / 255.0, b: 22.0 / 255.0, g: 52.0 / 255.0, a: 1.0 };
 static DARK_GREEN: Color = Color { r: 25.0 / 255.0, b: 69.0 / 255.0, g: 35.0 / 255.0, a: 1.0 };
@@ -92,10 +91,17 @@ enum Trap {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+enum MonsterType {
+    Gol,
+    Rook,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Monster {
     hp: Hp,
     max_hp: Hp,
     status: Option<Status>,
+    typ: MonsterType,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -113,11 +119,12 @@ enum EntityType {
 }
 
 impl EntityType {
-    fn monster(max_hp: Hp) -> EntityType {
+    fn monster(max_hp: Hp, typ: MonsterType) -> EntityType {
         return EntityType::Monster(Monster {
             hp: max_hp,
             max_hp: max_hp,
             status: None,
+            typ: typ,
         });
     }
 
@@ -142,7 +149,7 @@ impl EntityType {
     fn is_rook(&self) -> bool {
         return match self {
             // TODO very fragile way to do this. should carry a monster type
-            EntityType::Monster(monster) => monster.glyph == (130 as char),
+            EntityType::Monster(monster) => monster.typ == MonsterType::Rook,
             _ => false,
         };
     }
@@ -340,7 +347,7 @@ impl Entity {
             pos: pos,
             glyph: 152 as char,
             color: RED,
-            typ: EntityType::monster(1),
+            typ: EntityType::monster(1, MonsterType::Gol),
         }
     }
 
@@ -349,7 +356,7 @@ impl Entity {
             pos: pos,
             glyph: 130 as char,
             color: RED,
-            typ: EntityType::monster(2),
+            typ: EntityType::monster(2, MonsterType::Rook),
         }
     }
 }
@@ -656,12 +663,22 @@ fn update_monsters(game: &mut Game, _window: &mut Window) {
     for (index, monster) in game.entities.iter_mut().filter(|entity| entity.typ.is_monster()).enumerate() {
         let prev_position = monster.pos;
 
-        let mut pos_diff = player.pos - monster.pos;
-        if monster.typ.is_rook() && pos_diff.x.abs() == pos_diff.y.abs() {
-            pos_diff.x = 0;
+        let pos_diff = player.pos - monster.pos;
+        let mut pos_move = pos_diff;
+        pos_move.x = pos_move.x.signum();
+        pos_move.y = pos_move.y.signum();
+        // attempt to constrain rooks to lane movement.
+        // NOTE this traps them when the player is further in a direction that
+        // they cannot make progress in.
+        if monster.typ.is_rook() && pos_move.x.abs() == pos_move.y.abs() {
+            if pos_diff.x.abs() > pos_diff.y.abs() {
+                pos_move.y = 0.0;
+            } else {
+                pos_move.x = 0.0;
+            }
         }
 
-        monster.pos += Vector::new(pos_diff.x.signum(), pos_diff.y.signum());
+        monster.pos += Vector::new(pos_move.x, pos_move.y);
         
         if blocked_tile(monster.pos, &game.map) {
             monster.pos = prev_position;
