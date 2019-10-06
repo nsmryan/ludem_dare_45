@@ -7,7 +7,7 @@ use quicksilver::prelude::*;
 
 
 // TODO 
-//      map generation- groups of tiles, side step tile for Ls
+//      map generation- placement of enemies and traps
 //      another monster with different movement
 //      animations between frames
 //      add legend for currently avaiable tiles
@@ -15,8 +15,6 @@ use quicksilver::prelude::*;
 //      add status effects- chance for player or monster to take intended action
 //      idle animations
 //      interpolate characters between tiles
-//
-//      palette colors use
 
 
 const BACKGROUND_COLOR: Color = Color::BLACK;
@@ -27,20 +25,20 @@ const WINDOW_HEIGHT: u32 = 600;
 const MAP_WIDTH: usize = 10;
 const MAP_HEIGHT: usize = 10;
 
-const MAP_DRAW_X_OFFSET: usize  = 50;
+const MAP_DRAW_X_OFFSET: usize  = 200;
 const MAP_DRAW_Y_OFFSET: usize  = 120;
-const TILE_WIDTH_PX: u32 = 30; // 24;
-const TILE_HEIGHT_PX: u32 = 30; // 24;
+const TILE_WIDTH_PX: u32 = 40; // 24;
+const TILE_HEIGHT_PX: u32 = 40; // 24;
 
-static red: Color = Color { r: 161.0 / 255.0, b: 22.0 / 255.0, g: 52.0 / 255.0, a: 1.0 };
-static dark_green: Color = Color { r: 25.0 / 255.0, b: 69.0 / 255.0, g: 35.0 / 255.0, a: 1.0 };
-static green: Color = Color { r: 15.0 / 255.0, b: 128.0 / 255.0, g: 55.0 / 255.0, a: 1.0 };
-static bright_blue: Color = Color { r: 101.0 / 255.0, b: 233.0 / 255.0, g: 228.0 / 255.0, a: 1.0 };
-static dark_orange: Color = Color { r: 186.0 / 255.0, b: 98.0 / 255.0, g: 20.0 / 255.0, a: 1.0 };
-static orange: Color = Color { r: 255.0 / 255.0, b: 138.0 / 255.0, g: 0.0 / 255.0, a: 1.0 };
-static white: Color = Color { r: 238.0 / 255.0, b: 243.0 / 255.0, g: 244.0 / 255.0, a: 1.0 };
-static dark_gray: Color = Color { r: 81.0 / 255.0, b: 97.0 / 255.0, g: 102.0 / 255.0, a: 1.0 };
-static light_gray: Color = Color { r: 120.0 / 255.0, b: 128.0 / 255.0, g: 144.0 / 255.0, a: 1.0 };
+static RED: Color = Color { r: 161.0 / 255.0, b: 22.0 / 255.0, g: 52.0 / 255.0, a: 1.0 };
+static DARK_GREEN: Color = Color { r: 25.0 / 255.0, b: 69.0 / 255.0, g: 35.0 / 255.0, a: 1.0 };
+static GREEN: Color = Color { r: 15.0 / 255.0, b: 128.0 / 255.0, g: 55.0 / 255.0, a: 1.0 };
+static BRIGHT_BLUE: Color = Color { r: 101.0 / 255.0, b: 233.0 / 255.0, g: 228.0 / 255.0, a: 1.0 };
+static DARK_ORANGE: Color = Color { r: 186.0 / 255.0, b: 98.0 / 255.0, g: 20.0 / 255.0, a: 1.0 };
+static ORANGE: Color = Color { r: 255.0 / 255.0, b: 138.0 / 255.0, g: 0.0 / 255.0, a: 1.0 };
+static WHITE: Color = Color { r: 238.0 / 255.0, b: 243.0 / 255.0, g: 244.0 / 255.0, a: 1.0 };
+static DARK_GRAY: Color = Color { r: 81.0 / 255.0, b: 97.0 / 255.0, g: 102.0 / 255.0, a: 1.0 };
+static LIGHT_GRAY: Color = Color { r: 120.0 / 255.0, b: 128.0 / 255.0, g: 144.0 / 255.0, a: 1.0 };
 
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +55,16 @@ struct Tile {
     blocks: bool,
 }
 
+impl Tile {
+    fn wall(x: usize, y: usize) -> Tile {
+        return Tile {
+            pos: Vector::new(x as f32, y as f32),
+            glyph: 219 as char,
+            color: WHITE,
+            blocks: false,
+        };
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Status {
@@ -68,10 +76,19 @@ type Hp = i32;
 type EntityId = usize;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+enum Arrow {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Trap {
     Berserk, Kill, Bump,
     Teleport,
     CountDown(u8),
+    Arrow(Arrow),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -196,12 +213,7 @@ fn generate_map(size: Vector) -> Vec<Tile> {
     let mut map = Vec::with_capacity(width * height);
     for x in 0..width {
         for y in 0..height {
-            let mut tile = Tile {
-                pos: Vector::new(x as f32, y as f32),
-                glyph: 219 as char,
-                color: white,
-                blocks: false,
-            };
+            let mut tile = Tile::wall(x, y);
 
             if x == 0 || x == width - 1 || y == 0 || y == height - 1 {
                 tile.glyph = '#';
@@ -211,10 +223,45 @@ fn generate_map(size: Vector) -> Vec<Tile> {
         }
     }
 
-    for wall_index in 0..4 {
-        // TODO choose a point
-        //      walk a number of tiles
-        //      possibly add a tile to the side
+    let mut rng = thread_rng();
+    let mut walls_placed = 0;
+    while walls_placed < 5 {
+        let mut x = rng.gen_range(2 as i32, MAP_WIDTH as i32);
+        let mut y = rng.gen_range(2 as i32, MAP_HEIGHT as i32);
+        let x_dir: i32 = rng.gen_range(-1, 2);
+        let y_dir: i32 = rng.gen_range(-1, 2);
+        let dist = rng.gen_range(1, 5);
+
+        if x_dir.abs() == y_dir.abs() {
+            continue;
+        }
+
+        for square_index in 0..dist {
+            if let Some(map_index) = map.iter().position(|tile| tile.pos.x == x as f32 && tile.pos.y == y as f32) {
+                map[map_index] = Tile::wall(x as usize, y as usize);
+                map[map_index].glyph = '#';
+                map[map_index].blocks = true;
+                x += x_dir;
+                y += y_dir;
+                if x < 0 || x >= MAP_WIDTH as i32 || y < 0 || y > MAP_HEIGHT as i32 {
+                    break;
+                }
+            }
+        }
+
+        if rng.gen_range(0.0, 1.0) > 0.5 {
+            let x_dir = x_dir * -1;
+            let y_dir = y_dir * -1;
+            x += x_dir;
+            y += y_dir;
+            if let Some(map_index) = map.iter().position(|tile| tile.pos.x == x as f32 && tile.pos.y == y as f32) {
+                map[map_index] = Tile::wall(x as usize, y as usize);
+                map[map_index].glyph = '#';
+                map[map_index].blocks = true;
+            }
+        }
+
+        walls_placed += 1;
     }
 
     return map;
@@ -262,33 +309,52 @@ impl Entity {
             Trap::Bump => '+',
             Trap::Teleport => '!',
             Trap::CountDown(n) => ('0' as u8 + n) as char,
+            Trap::Arrow(dir) => {
+                match dir {
+                    Arrow::Left => 17 as char,
+                    Arrow::Right => 16 as char,
+                    Arrow::Up => 30 as char,
+                    Arrow::Down => 31 as char,
+                }
+            }
         };
 
         Entity {
             pos: pos,
             glyph: chr,
-            color: green,
+            color: GREEN,
             typ: EntityType::trap(trap),
         }
     }
 
-    fn goblin(pos: Vector) -> Entity {
+    fn gol(pos: Vector) -> Entity {
         Entity {
             pos: pos,
-            glyph: 'g',
-            color: red,
+            glyph: 152 as char,
+            color: RED,
+            typ: EntityType::monster(1),
+        }
+    }
+
+    fn rook(pos: Vector) -> Entity {
+        Entity {
+            pos: pos,
+            glyph: 130 as char,
+            color: RED,
             typ: EntityType::monster(1),
         }
     }
 }
 
 fn generate_entities(entities: &mut Vec<Entity>) {
-    entities.push(Entity::goblin(Vector::new(9, 10)));
-    entities.push(Entity::goblin(Vector::new(2, 14)));
+    entities.push(Entity::gol(Vector::new(4, 4)));
+    entities.push(Entity::rook(Vector::new(2, 1)));
     entities.push(Entity::trap(Vector::new(6, 6), Trap::Bump)); 
     entities.push(Entity::trap(Vector::new(8, 8), Trap::Berserk)); 
     entities.push(Entity::trap(Vector::new(3, 8), Trap::Berserk)); 
-    entities.push(Entity::trap(Vector::new(9, 8), Trap::Berserk)); 
+    entities.push(Entity::trap(Vector::new(4, 2), Trap::Arrow(Arrow::Left))); 
+    entities.push(Entity::trap(Vector::new(4, 3), Trap::Arrow(Arrow::Left))); 
+    entities.push(Entity::trap(Vector::new(4, 4), Trap::Arrow(Arrow::Left))); 
     entities.push(Entity::trap(Vector::new(7, 6), Trap::Kill)); 
     entities.push(Entity::trap(Vector::new(7, 7), Trap::Kill)); 
     entities.push(Entity::trap(Vector::new(7, 2), Trap::Teleport)); 
@@ -321,7 +387,7 @@ impl State for Game {
         let font_mononoki = "mononoki-Regular.ttf";
 
         let title = Asset::new(Font::load(font_mononoki).and_then(|font| {
-            font.render("Ludum Dare 45", &FontStyle::new(72.0, white))
+            font.render("Ludum Dare 45", &FontStyle::new(72.0, WHITE))
         }));
 
         let font_image = "rexpaint16x16.png";
@@ -340,27 +406,28 @@ impl State for Game {
         }));
 
         let lost_game_message = Asset::new(Font::load(font_mononoki).and_then(|font| {
-            font.render("You Lose!", &FontStyle::new(72.0, white))
+            font.render("You Lose!", &FontStyle::new(72.0, WHITE))
         }));
 
         let mononoki_font_info = Asset::new(Font::load(font_mononoki).and_then(|font| {
             font.render(
                 "",
-                &FontStyle::new(20.0, white),
+                &FontStyle::new(20.0, WHITE),
             )
         }));
 
         let square_font_info = Asset::new(Font::load(font_mononoki).and_then(move |font| {
             font.render(
                 "A Ludum Dare Game by Joel and Noah Ryan",
-                &FontStyle::new(20.0, white),
+                &FontStyle::new(20.0, WHITE),
             )
         }));
 
+        // TODO inventory message is here.
         let inventory = Asset::new(Font::load(font_mononoki).and_then(move |font| {
             font.render(
-                "Inventory:\n[A] Sword\n[B] Shield\n[C] Darts",
-                &FontStyle::new(20.0, white),
+                "",
+                &FontStyle::new(20.0, WHITE),
             )
         }));
 
@@ -388,7 +455,7 @@ impl State for Game {
         let tile_size_px = Vector::new(TILE_WIDTH_PX, TILE_HEIGHT_PX);
         let tileset = Asset::new(Font::load(font_square).and_then(move |text| {
             let tiles = text
-                .render(game_glyphs, &FontStyle::new(tile_size_px.y, white))
+                .render(game_glyphs, &FontStyle::new(tile_size_px.y, WHITE))
                 .expect("Could not render the font tileset.");
             let mut tileset = HashMap::new();
             for (index, glyph) in game_glyphs.chars().enumerate() {
@@ -499,7 +566,7 @@ impl State for Game {
             let color_noise =
                 self.noise.get([6.0 * (pos.x as f64 / WINDOW_WIDTH as f64),
                                 6.0 * (pos.y as f64 / WINDOW_HEIGHT as f64)]);
-            let tile_color = lerp_color(dark_gray, light_gray, color_noise as f32);
+            let tile_color = lerp_color(DARK_GRAY, LIGHT_GRAY, color_noise as f32);
             self.char_map.execute(|char_map| {
                 draw_char(&char_map, window, pos, tile.glyph, tile_color);
                 return Ok(());
@@ -577,6 +644,7 @@ fn update_monsters(game: &mut Game, _window: &mut Window) {
 
     let mut attacks: Vec<(EntityId, EntityId)> = Vec::new();
 
+    // For each monster
     for (index, monster) in game.entities.iter_mut().filter(|entity| entity.typ.is_monster()).enumerate() {
         let prev_position = monster.pos;
         let pos_diff = player.pos - monster.pos;
@@ -595,6 +663,7 @@ fn update_monsters(game: &mut Game, _window: &mut Window) {
         }
     }
 
+    // resolve attacks that occured
     for attack in attacks {
         let typ = &mut game.entities[attack.1].typ;
         match typ {
@@ -610,7 +679,15 @@ fn update_monsters(game: &mut Game, _window: &mut Window) {
         }
     }
 
-    //let mut remove_indices: Vec<usize> = Vec::new();
+    let mut remove_indices: Vec<usize> =
+        game.entities.iter()
+                     .enumerate()
+                     .filter(|(ix, ent)| ent.typ.is_monster() && ent.hp() <= 0)
+                     .map(|(ix, _ent)| ix)
+                     .collect();
+    for ix in remove_indices {
+        game.entities.swap_remove(ix);
+    }
 }
 
 fn lerp_color(src: Color, dst: Color, amount: f32) -> Color {
@@ -668,6 +745,7 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
     let mut rng = thread_rng();
     let entities_clone = entities.clone();
     let mut removals: Vec<usize> = Vec::new();
+    let mut moves: Vec<(Vector, usize)> = Vec::new();
     let mut count_downs: Vec<(usize, u8)> = Vec::new();
 
     let trap_iter =
@@ -733,12 +811,52 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
                                 count_downs.push((trap_index, n - 1));
                             }
                         },
+
+                        Trap::Arrow(dir) => {
+                            let x_dir;
+                            let y_dir;
+                            match dir {
+                                Arrow::Left => {
+                                    x_dir = -1;
+                                    y_dir = 0;
+                                },
+
+                                Arrow::Right => {
+                                    x_dir = 1;
+                                    y_dir = 0;
+                                },
+
+                                Arrow::Up => {
+                                    x_dir = 0;
+                                    y_dir = -1;
+                                },
+
+                                Arrow::Down => {
+                                    x_dir = 0;
+                                    y_dir = 1;
+                                },
+                            }
+
+                            let mut cur_pos = entity.pos;
+                            let mut prev_pos = entity.pos;
+                            cur_pos += Vector::new(x_dir, y_dir);
+                            while !blocked_tile(cur_pos, map) && occupied_tile(cur_pos, &entities_clone) == None {
+                                prev_pos = cur_pos;
+                                cur_pos += Vector::new(x_dir, y_dir);
+                            }
+                            moves.push((prev_pos, index));
+                        }
                     }
                 },
 
                 _ => panic!("Unreachable?"),
             }
         }
+    }
+
+
+    for (pos, index) in moves {
+        entities[index].pos = pos;
     }
 
     for (ix, new_n) in count_downs.iter() {
@@ -767,10 +885,11 @@ fn draw_entity(entity: &Entity, offset_px: Vector, window: &mut Window, char_map
 fn draw_char(char_map: &HashMap<u32, Image>, window: &mut Window, pos: Vector, chr: char, color: Color) {
     let char_ix = chr as u32;
     let rect = Rectangle::new(pos, Vector::new(16, 16));
+    let scale = 2.5;
     window.draw_ex(&rect,
                    Blended(&char_map[&char_ix], color),
-                   Transform::scale(Vector::new(2.0, 2.0)),
-                   2.0);
+                   Transform::scale(Vector::new(scale, scale)),
+                   scale);
 }
 
 fn main() {
@@ -786,5 +905,5 @@ fn main() {
         scale: quicksilver::graphics::ImageScaleStrategy::Blur,
         ..Default::default()
     };
-    run::<Game>("Ludem Dare 45", Vector::new(WINDOW_WIDTH, WINDOW_HEIGHT), settings);
+    run::<Game>("Ludum Dare 45", Vector::new(WINDOW_WIDTH, WINDOW_HEIGHT), settings);
 }
