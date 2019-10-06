@@ -139,6 +139,14 @@ impl EntityType {
         };
     }
 
+    fn is_rook(&self) -> bool {
+        return match self {
+            // TODO very fragile way to do this. should carry a monster type
+            EntityType::Monster(monster) => monster.glyph == (130 as char),
+            _ => false,
+        };
+    }
+
     fn is_trap(&self) -> bool {
         return match self {
             EntityType::Trap(_) => true,
@@ -341,7 +349,7 @@ impl Entity {
             pos: pos,
             glyph: 130 as char,
             color: RED,
-            typ: EntityType::monster(1),
+            typ: EntityType::monster(2),
         }
     }
 }
@@ -647,7 +655,11 @@ fn update_monsters(game: &mut Game, _window: &mut Window) {
     // For each monster
     for (index, monster) in game.entities.iter_mut().filter(|entity| entity.typ.is_monster()).enumerate() {
         let prev_position = monster.pos;
-        let pos_diff = player.pos - monster.pos;
+
+        let mut pos_diff = player.pos - monster.pos;
+        if monster.typ.is_rook() && pos_diff.x.abs() == pos_diff.y.abs() {
+            pos_diff.x = 0;
+        }
 
         monster.pos += Vector::new(pos_diff.x.signum(), pos_diff.y.signum());
         
