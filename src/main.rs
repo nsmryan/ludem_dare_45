@@ -7,9 +7,6 @@ use quicksilver::prelude::*;
 
 
 // TODO 
-//      fix teleport tile
-//      fix countdown tile
-//      color background tiles- blue-gray, each tile is different
 //      palette colors use
 //      map generation- groups of tiles, side step tile for Ls
 //      add status effects- chance for player or monster to take intended action
@@ -21,6 +18,9 @@ use quicksilver::prelude::*;
 
 const TEXT_COLOR: Color = Color::WHITE;
 const BACKGROUND_COLOR: Color = Color::BLACK;
+
+const WINDOW_WIDTH: u32 = 800;
+const WINDOW_HEIGHT: u32 = 600;
 
 const MAP_WIDTH: usize = 10;
 const MAP_HEIGHT: usize = 10;
@@ -478,10 +478,17 @@ impl State for Game {
         for tile in self.map.iter() {
             let pos_px = tile.pos.times(tile_size_px);
             let pos = offset_px + pos_px;
-            let color_noise = self.noise.get([pos.x as f64, pos.y as f64]);
+            let color_noise =
+                self.noise.get([6.0 * (pos.x as f64 / WINDOW_WIDTH as f64),
+                                6.0 * (pos.y as f64 / WINDOW_HEIGHT as f64)]);
+            dbg!(color_noise);
+            dbg!(pos);
             // TODO use palette for mixing
+            let dark_tile_color = Color::from_rgba(120, 128, 144, 1.0);
+            let light_tile_color = Color::from_rgba(81, 97, 102, 1.0);
+            let tile_color = lerp_color(dark_tile_color, light_tile_color, color_noise as f32);
             self.char_map.execute(|char_map| {
-                draw_char(&char_map, window, pos, tile.glyph, tile.color);
+                draw_char(&char_map, window, pos, tile.glyph, tile_color);
                 return Ok(());
             });
         }
@@ -591,6 +598,15 @@ fn update_monsters(game: &mut Game, _window: &mut Window) {
     }
 
     //let mut remove_indices: Vec<usize> = Vec::new();
+}
+
+fn lerp_color(src: Color, dst: Color, amount: f32) -> Color {
+    return Color {
+        r: lerp(src.r, dst.r, amount),
+        g: lerp(src.g, dst.g, amount),
+        b: lerp(src.b, dst.b, amount),
+        a: lerp(src.a, dst.a, amount),
+    };
 }
 
 fn attempt_move(pos: Vector, offset: Vector, map: &Map) -> Vector {
@@ -757,5 +773,5 @@ fn main() {
         scale: quicksilver::graphics::ImageScaleStrategy::Blur,
         ..Default::default()
     };
-    run::<Game>("Ludem Dare 45", Vector::new(800, 600), settings);
+    run::<Game>("Ludem Dare 45", Vector::new(WINDOW_WIDTH, WINDOW_HEIGHT), settings);
 }
