@@ -12,11 +12,13 @@ use quicksilver::prelude::*;
 //      add legend for currently avaiable tiles
 //
 //      add status effects- chance for player or monster to take intended action
-//      idle animations
 //      interpolate characters between tiles
 
 
 const BACKGROUND_COLOR: Color = Color::BLACK;
+const SCALE: f32 = 2.5;
+
+const WALL_CHAR: char = 2 as char;
 
 const WINDOW_WIDTH: u32 = 800;
 const WINDOW_HEIGHT: u32 = 600;
@@ -29,16 +31,21 @@ const MAP_DRAW_Y_OFFSET: usize  = 120;
 const TILE_WIDTH_PX: u32 = 40;
 const TILE_HEIGHT_PX: u32 = 40;
 
-static RED: Color = Color { r: 161.0 / 255.0, b: 22.0 / 255.0, g: 52.0 / 255.0, a: 1.0 };
-static DARK_GREEN: Color = Color { r: 25.0 / 255.0, b: 69.0 / 255.0, g: 35.0 / 255.0, a: 1.0 };
-static GREEN: Color = Color { r: 15.0 / 255.0, b: 128.0 / 255.0, g: 55.0 / 255.0, a: 1.0 };
-static BRIGHT_BLUE: Color = Color { r: 101.0 / 255.0, b: 233.0 / 255.0, g: 228.0 / 255.0, a: 1.0 };
-static DARK_ORANGE: Color = Color { r: 186.0 / 255.0, b: 98.0 / 255.0, g: 20.0 / 255.0, a: 1.0 };
-static ORANGE: Color = Color { r: 255.0 / 255.0, b: 138.0 / 255.0, g: 0.0 / 255.0, a: 1.0 };
-static WHITE: Color = Color { r: 238.0 / 255.0, b: 243.0 / 255.0, g: 244.0 / 255.0, a: 1.0 };
-static DARK_GRAY: Color = Color { r: 81.0 / 255.0, b: 97.0 / 255.0, g: 102.0 / 255.0, a: 1.0 };
-static LIGHT_GRAY: Color = Color { r: 120.0 / 255.0, b: 128.0 / 255.0, g: 144.0 / 255.0, a: 1.0 };
+const IDLE_PROB: f32 = 1.0;
 
+static RED: Color         = Color { r: 161.0 / 255.0, g: 22.0  / 255.0, b: 52.0  / 255.0, a: 1.0 };
+static DARK_GREEN: Color  = Color { r: 25.0  / 255.0, g: 69.0  / 255.0, b: 35.0  / 255.0, a: 1.0 };
+static GREEN: Color       = Color { r: 15.0  / 255.0, g: 128.0 / 255.0, b: 55.0  / 255.0, a: 1.0 };
+static BRIGHT_BLUE: Color = Color { r: 101.0 / 255.0, g: 233.0 / 255.0, b: 228.0 / 255.0, a: 1.0 };
+static DARK_ORANGE: Color = Color { r: 186.0 / 255.0, g: 98.0  / 255.0, b: 20.0  / 255.0, a: 1.0 };
+static ORANGE: Color      = Color { r: 255.0 / 255.0, g: 138.0 / 255.0, b: 0.0   / 255.0, a: 1.0 };
+static WHITE: Color       = Color { r: 238.0 / 255.0, g: 243.0 / 255.0, b: 244.0 / 255.0, a: 1.0 };
+static DARK_GRAY: Color   = Color { r: 81.0  / 255.0, g: 97.0  / 255.0, b: 102.0 / 255.0, a: 1.0 };
+static LIGHT_GRAY: Color  = Color { r: 120.0 / 255.0, g: 128.0 / 255.0, b: 144.0 / 255.0, a: 1.0 };
+static STONE_GRAY: Color  = Color { r: 67.0  / 255.0, g: 59.0  / 255.0, b: 62.0  / 255.0, a: 1.0 };
+
+static MONSTER_COLOR: Color = LIGHT_GRAY;
+static TRAP_COLOR: Color = ORANGE;
 
 #[derive(Clone, Debug, PartialEq)]
 enum GameState {
@@ -231,7 +238,7 @@ fn generate_map(size: Vector) -> Vec<Tile> {
             let mut tile = Tile::wall(x, y);
 
             if x == 0 || x == width - 1 || y == 0 || y == height - 1 {
-                tile.glyph = '#';
+                tile.glyph = WALL_CHAR;
                 tile.blocks = true;
             };
             map.push(tile);
@@ -251,10 +258,10 @@ fn generate_map(size: Vector) -> Vec<Tile> {
             continue;
         }
 
-        for square_index in 0..dist {
+        for _square_index in 0..dist {
             if let Some(map_index) = map.iter().position(|tile| tile.pos.x == x as f32 && tile.pos.y == y as f32) {
                 map[map_index] = Tile::wall(x as usize, y as usize);
-                map[map_index].glyph = '#';
+                map[map_index].glyph = WALL_CHAR;
                 map[map_index].blocks = true;
                 x += x_dir;
                 y += y_dir;
@@ -271,7 +278,7 @@ fn generate_map(size: Vector) -> Vec<Tile> {
             y += y_dir;
             if let Some(map_index) = map.iter().position(|tile| tile.pos.x == x as f32 && tile.pos.y == y as f32) {
                 map[map_index] = Tile::wall(x as usize, y as usize);
-                map[map_index].glyph = '#';
+                map[map_index].glyph = WALL_CHAR;
                 map[map_index].blocks = true;
             }
         }
@@ -314,6 +321,7 @@ struct Entity {
     glyph: char,
     color: Color,
     typ: EntityType,
+    idle: Option<usize>,
 }
 
 impl Entity {
@@ -337,8 +345,9 @@ impl Entity {
         Entity {
             pos: pos,
             glyph: chr,
-            color: GREEN,
+            color: TRAP_COLOR,
             typ: EntityType::trap(trap),
+            idle: None,
         }
     }
 
@@ -346,8 +355,9 @@ impl Entity {
         Entity {
             pos: pos,
             glyph: 152 as char,
-            color: RED,
+            color: MONSTER_COLOR,
             typ: EntityType::monster(1, MonsterType::Gol),
+            idle: None,
         }
     }
 
@@ -355,8 +365,9 @@ impl Entity {
         Entity {
             pos: pos,
             glyph: 130 as char,
-            color: RED,
+            color: MONSTER_COLOR,
             typ: EntityType::monster(2, MonsterType::Rook),
+            idle: None,
         }
     }
 }
@@ -375,7 +386,6 @@ fn generate_entities(entities: &mut Vec<Entity>) {
     entities.push(Entity::trap(Vector::new(7, 2), Trap::Teleport)); 
     entities.push(Entity::trap(Vector::new(4, 8), Trap::Teleport)); 
     entities.push(Entity::trap(Vector::new(1, 2), Trap::CountDown(3))); 
-    entities.push(Entity::trap(Vector::new(4, 2), Trap::CountDown(1)));
 }
 
 struct Game {
@@ -392,6 +402,9 @@ struct Game {
     player_id: usize,
     tileset: Asset<HashMap<char, Image>>,
     noise: Perlin,
+    gol_idle: Asset<Vec<Image>>,
+    rook_idle: Asset<Vec<Image>>,
+    player_idle: Asset<Vec<Image>>,
 }
 
 impl State for Game {
@@ -405,7 +418,7 @@ impl State for Game {
             font.render("Ludum Dare 45", &FontStyle::new(72.0, WHITE))
         }));
 
-        let font_image = "rexpaint16x16.png";
+        let font_image = "LD45_SpriteSheet.png";
         let char_map = Asset::new(Image::load(font_image).and_then(|image| {
             let mut char_map = HashMap::new();
             let char_size = Vector::new(16, 16);
@@ -418,6 +431,43 @@ impl State for Game {
             }
 
             return Ok(char_map);
+        }));
+
+        let gol_idle_name = "Gol_Idle.png";
+        let gol_idle = Asset::new(Image::load(gol_idle_name).and_then(|image| {
+            let gol_idle_anims: u32 = 9;
+            let mut gol_idle = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..gol_idle_anims {
+                let pos = Vector::new(image_index * 16, 0);
+                gol_idle.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(gol_idle);
+        }));
+
+        let rook_idle_name = "Rook_Idle.png";
+        let rook_idle = Asset::new(Image::load(rook_idle_name).and_then(|image| {
+            let mut rook_idle = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..12 {
+                let pos = Vector::new(image_index * 16, 0);
+                rook_idle.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(rook_idle);
+        }));
+
+        let player_idle_name = "Player_Idle.png";
+        let player_idle = Asset::new(Image::load(player_idle_name).and_then(|image| {
+            let mut player_idle = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..10 {
+                let pos = Vector::new(image_index * 16, 0);
+                player_idle.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(player_idle);
         }));
 
         let lost_game_message = Asset::new(Font::load(font_mononoki).and_then(|font| {
@@ -454,12 +504,13 @@ impl State for Game {
         entities.push(Entity {
             pos: Vector::new(5, 3),
             glyph: '@',
-            color: Color::ORANGE,
+            color: GREEN,
             typ: EntityType::Player(Player { 
                 hp: 5,
                 max_hp: 5,
                 status: None,
             }),
+            idle: None,
         });
         generate_entities(&mut entities);
 
@@ -495,6 +546,9 @@ impl State for Game {
             player_id,
             tileset,
             noise: Perlin::new(),
+            gol_idle,
+            rook_idle,
+            player_idle,
         })
     }
 
@@ -597,9 +651,46 @@ impl State for Game {
         }
 
         // draw other entities
-        for entity in self.entities.iter() {
-            if !entity.typ.is_trap() {
-                draw_entity(entity, offset_px, window, &mut self.char_map);
+        for entity in self.entities.iter_mut() {
+            match entity.idle {
+                None => {
+                    draw_entity(entity, offset_px, window, &mut self.char_map);
+                }
+
+                Some(index) => {
+                    let tile_size_px = Vector::new(TILE_WIDTH_PX, TILE_HEIGHT_PX);
+                    let pos_px = entity.pos.times(tile_size_px);
+                    let pos = offset_px + pos_px;
+                    match entity.typ {
+                        EntityType::Monster(monster) => {
+                            let idle_anims;
+                            if entity.typ.is_rook() {
+                                idle_anims = &mut self.rook_idle;
+                            } else {
+                                idle_anims = &mut self.gol_idle;
+                            }
+                            idle_anims.execute(|idle_anims| {
+                                let rect = Rectangle::new(pos,
+                                                          Vector::new(16, 16));
+                                window.draw_ex(&rect,
+                                               Blended(&idle_anims[index], entity.color),
+                                               Transform::scale(Vector::new(SCALE, SCALE)),
+                                               SCALE);
+                                if (index + 1) >= idle_anims.len() {
+                                    entity.idle = None;
+                                } else {
+                                    entity.idle = Some(index + 1);
+                                }
+                                return Ok(());
+                            }).unwrap();
+                        },
+
+                        EntityType::Player(player) => {
+                        },
+
+                        _ => continue,
+                    }
+                }
             }
         }
 
@@ -640,11 +731,21 @@ impl State for Game {
                 window.draw(
                     &image
                         .area()
-                        .translate((MAP_DRAW_X_OFFSET as u16 + 100, MAP_DRAW_X_OFFSET as u16 + 120)),
+                        .translate((MAP_DRAW_X_OFFSET as u16 + 40, WINDOW_HEIGHT as u16 - 100)),
                     Img(&image),
                 );
                 Ok(())
             })?;
+        }
+
+        let mut rng = thread_rng();
+        for entity in self.entities.iter_mut() {
+            if entity.typ.is_monster() &&
+                entity.idle == None &&
+                rng.gen_range(0.0, 1.0) < IDLE_PROB {
+
+                entity.idle = Some(0);
+            }
         }
 
         Ok(())
@@ -711,12 +812,23 @@ fn update_monsters(game: &mut Game, _window: &mut Window) {
     let mut remove_indices: Vec<usize> =
         game.entities.iter()
                      .enumerate()
-                     .filter(|(ix, ent)| ent.typ.is_monster() && ent.hp() <= 0)
+                     .filter(|(_ix, ent)| ent.typ.is_monster() && ent.hp() <= 0)
                      .map(|(ix, _ent)| ix)
                      .collect();
     for ix in remove_indices {
         game.entities.swap_remove(ix);
     }
+
+    // check for idle animations
+    //let mut rng = thread_rng();
+    //for entity in game.entities.iter_mut() {
+    //    if entity.typ.is_monster() &&
+    //        entity.idle == None &&
+    //        rng.gen_range(0.0, 1.0) < IDLE_PROB {
+
+    //        entity.idle = Some(0);
+    //    }
+    //}
 }
 
 fn lerp_color(src: Color, dst: Color, amount: f32) -> Color {
@@ -833,7 +945,7 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
                                              &map);
                         }
 
-                        Trap::CountDown(mut n) => {
+                        Trap::CountDown(n) => {
                             if n == 0 {
                                 entity.typ.lose_hp(5);
                             } else {
@@ -900,25 +1012,54 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
     }
 }
 
-fn draw_entity(entity: &Entity, offset_px: Vector, window: &mut Window, char_map: &mut Asset<HashMap<u32, Image>>) {
+fn draw_entity(entity: &Entity,
+               offset_px: Vector,
+               window: &mut Window,
+               char_map: &mut Asset<HashMap<u32, Image>>) {
     let tile_size_px = Vector::new(TILE_WIDTH_PX, TILE_HEIGHT_PX);
     let pos_px = entity.pos.times(tile_size_px);
     let pos = offset_px + pos_px;
+
+    if !entity.typ.is_trap() {
+        dbg!(entity);
+    }
+    let color = 
+        match entity.typ {
+            EntityType::Monster(monster) => {
+                if monster.status == Some(Status::Berserk) {
+                    RED
+                } else {
+                    entity.color
+                }
+            }
+
+            EntityType::Player(player) => {
+                if player.status == Some(Status::Berserk) {
+                    RED
+                } else {
+                    entity.color
+                }
+            }
+
+            _ => {
+                entity.color
+            }
+        };
+
     char_map.execute(|char_map| {
         draw_char(&char_map, window, pos, entity.glyph, entity.color);
         return Ok(());
     }).unwrap();
 }
 
-// Draw Function
+// draw functions
 fn draw_char(char_map: &HashMap<u32, Image>, window: &mut Window, pos: Vector, chr: char, color: Color) {
     let char_ix = chr as u32;
     let rect = Rectangle::new(pos, Vector::new(16, 16));
-    let scale = 2.5;
     window.draw_ex(&rect,
                    Blended(&char_map[&char_ix], color),
-                   Transform::scale(Vector::new(scale, scale)),
-                   scale);
+                   Transform::scale(Vector::new(SCALE, SCALE)),
+                   SCALE);
 }
 
 fn main() {
@@ -932,6 +1073,8 @@ fn main() {
         // If the graphics do need to be scaled (e.g. using
         // `with_center`), blur them. This looks better with fonts.
         scale: quicksilver::graphics::ImageScaleStrategy::Blur,
+        draw_rate: 250.0,
+        update_rate: 50.0,
         ..Default::default()
     };
     run::<Game>("Ludum Dare 45", Vector::new(WINDOW_WIDTH, WINDOW_HEIGHT), settings);
