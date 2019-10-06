@@ -5,6 +5,13 @@ use rand::*;
 use quicksilver::prelude::*;
 
 
+// TODO add status effects
+//      idle animations
+//      animations between frames
+//      interpolate characters between tiles
+//      map generation
+
+
 const TEXT_COLOR: Color = Color::WHITE;
 const BACKGROUND_COLOR: Color = Color::BLACK;
 
@@ -13,6 +20,8 @@ const MAP_HEIGHT: usize = 15;
 
 const MAP_DRAW_X_OFFSET: usize  = 50;
 const MAP_DRAW_Y_OFFSET: usize  = 120;
+const TILE_WIDTH_PX: u32 = 24;
+const TILE_HEIGHT_PX: u32 = 24;
 
 
 #[derive(Clone, Debug, PartialEq)]
@@ -29,6 +38,12 @@ struct Tile {
     blocks: bool,
 }
 
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Status {
+    Berserk,
+}
+
 type Hp = i32;
 
 type EntityId = usize;
@@ -38,18 +53,21 @@ enum Trap {
     Berserk,
     Kill,
     Bump,
+    Teleport,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Monster {
     hp: Hp,
     max_hp: Hp,
+    status: Option<Status>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Player {
     hp: Hp,
     max_hp: Hp,
+    status: Option<Status>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -61,7 +79,11 @@ enum EntityType {
 
 impl EntityType {
     fn monster(max_hp: Hp) -> EntityType {
-        return EntityType::Monster(Monster { hp: max_hp, max_hp: max_hp });
+        return EntityType::Monster(Monster {
+            hp: max_hp,
+            max_hp: max_hp,
+            status: None,
+        });
     }
 
     fn trap(trap: Trap) -> EntityType {
@@ -210,9 +232,16 @@ struct Entity {
 
 impl Entity {
     fn trap(pos: Vector, trap: Trap) -> Entity {
+        let chr = match trap {
+            Trap::Kill => '%',
+            Trap::Berserk => '*',
+            Trap::Bump => '0',
+            Trap::Teleport => '!',
+        };
+
         Entity {
             pos: pos,
-            glyph: '0',
+            glyph: chr,
             color: Color::GREEN,
             typ: EntityType::trap(trap),
         }
@@ -232,6 +261,13 @@ fn generate_entities(entities: &mut Vec<Entity>) {
     entities.push(Entity::goblin(Vector::new(9, 10)));
     entities.push(Entity::goblin(Vector::new(2, 14)));
     entities.push(Entity::trap(Vector::new(6, 6), Trap::Bump)); 
+    entities.push(Entity::trap(Vector::new(8, 8), Trap::Berserk)); 
+    entities.push(Entity::trap(Vector::new(3, 8), Trap::Berserk)); 
+    entities.push(Entity::trap(Vector::new(9, 8), Trap::Berserk)); 
+    entities.push(Entity::trap(Vector::new(7, 6), Trap::Kill)); 
+    entities.push(Entity::trap(Vector::new(7, 8), Trap::Kill)); 
+    entities.push(Entity::trap(Vector::new(7, 2), Trap::Teleport)); 
+    entities.push(Entity::trap(Vector::new(4, 8), Trap::Teleport)); 
 }
 
 struct Game {
@@ -247,7 +283,6 @@ struct Game {
     entities: Vec<Entity>,
     player_id: usize,
     tileset: Asset<HashMap<char, Image>>,
-    tile_size_px: Vector,
 }
 
 impl State for Game {
@@ -310,7 +345,11 @@ impl State for Game {
             pos: Vector::new(5, 3),
             glyph: '@',
             color: Color::ORANGE,
-            typ: EntityType::Player(Player { hp: 3, max_hp: 5 }),
+            typ: EntityType::Player(Player { 
+                hp: 3,
+                max_hp: 5,
+                status: None,
+            }),
         });
         generate_entities(&mut entities);
 
@@ -318,7 +357,7 @@ impl State for Game {
         // License: CC BY 3.0 https://creativecommons.org/licenses/by/3.0/deed.en_US
         let font_square = "square.ttf";
         let game_glyphs = "#@g.%";
-        let tile_size_px = Vector::new(24, 24);
+        let tile_size_px = Vector::new(TILE_WIDTH_PX, TILE_HEIGHT_PX);
         let tileset = Asset::new(Font::load(font_square).and_then(move |text| {
             let tiles = text
                 .render(game_glyphs, &FontStyle::new(tile_size_px.y, TEXT_COLOR))
@@ -345,7 +384,6 @@ impl State for Game {
             entities,
             player_id,
             tileset,
-            tile_size_px,
         })
     }
 
@@ -358,17 +396,24 @@ impl State for Game {
 
                 if took_turn {
                     update_monsters(self, window);
+                    resolve_traps(&mut self.entities, &self.map);
                 }
 
                 if window.keyboard()[Key::Escape].is_down() {
                     window.close();
                 }
 
-                resolve_traps(&mut self.entities, &self.map);
-
                 if self.entities[self.player_id].hp() <= 0 {
                     self.game_state = GameState::Lost;
                 }
+
+                self.entities = self.entities.iter().filter(|entity| {
+                    if entity.typ.is_monster() {
+                        return entity.hp() > 0;
+                    }
+
+                    return true;
+                }).map(|ent| ent.clone()).collect();
             },
 
             GameState::Lost => {
@@ -415,7 +460,7 @@ impl State for Game {
             Ok(())
         })?;
 
-        let tile_size_px = self.tile_size_px;
+        let tile_size_px = Vector::new(TILE_WIDTH_PX, TILE_HEIGHT_PX);
         let offset_px = Vector::new(MAP_DRAW_X_OFFSET as u8, MAP_DRAW_Y_OFFSET as u8);
 
         // Draw the map
@@ -423,19 +468,22 @@ impl State for Game {
             let pos_px = tile.pos.times(tile_size_px);
             let pos = offset_px + pos_px;
             self.char_map.execute(|char_map| {
-                draw_char(&char_map, window, pos, tile.glyph);
+                draw_char(&char_map, window, pos, tile.glyph, tile.color);
                 return Ok(());
             });
         }
 
         // Draw entities
         for entity in self.entities.iter() {
-            let pos_px = entity.pos.times(tile_size_px);
-            let pos = offset_px + pos_px;
-            self.char_map.execute(|char_map| {
-                draw_char(&char_map, window, pos, entity.glyph);
-                return Ok(());
-            }).unwrap();
+            if entity.typ.is_trap() {
+                draw_entity(entity, offset_px, window, &mut self.char_map);
+            }
+        }
+
+        for entity in self.entities.iter() {
+            if !entity.typ.is_trap() {
+                draw_entity(entity, offset_px, window, &mut self.char_map);
+            }
         }
 
         let player = &self.entities[self.player_id];
@@ -487,7 +535,7 @@ impl State for Game {
 }
 
 // Update Functions
-fn update_monsters(game: &mut Game, window: &mut Window) {
+fn update_monsters(game: &mut Game, _window: &mut Window) {
     let player = game.entities[game.player_id].clone();
     // NOTE copies all entities every frame!
     let entities = game.entities.clone();
@@ -503,21 +551,23 @@ fn update_monsters(game: &mut Game, window: &mut Window) {
         if blocked_tile(monster.pos, &game.map) {
             monster.pos = prev_position;
         } else if let Some(entity) = occupied_tile(monster.pos, &entities) {
-            monster.pos = prev_position;
             if entity.typ.is_player() {
-                attacks.push((index, entities.iter().enumerate().find(|(index, ent)| **ent == entity).unwrap().0));
-            } // else if monster is berserk, attack other monster
+                monster.pos = prev_position;
+                attacks.push((index, entities.iter().enumerate().find(|(_index, ent)| **ent == entity).unwrap().0));
+            }  else if entity.typ.is_monster() {
+                monster.pos = prev_position;
+            }
         }
     }
 
     for attack in attacks {
         let typ = &mut game.entities[attack.1].typ;
         match typ {
-            EntityType::Player(player) => {
+            EntityType::Player(_player) => {
                 typ.lose_hp(1);
             },
 
-            EntityType::Monster(monster) => {
+            EntityType::Monster(_monster) => {
                 typ.lose_hp(1);
             },
 
@@ -580,9 +630,40 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
                 EntityType::Trap(trap) => {
                     match trap {
                         Trap::Berserk => {
+                            match entity.typ {
+                                EntityType::Monster(mut monster) => {
+                                    monster.status = Some(Status::Berserk);
+                                },
+
+                                EntityType::Player(mut player) => {
+                                    player.status = Some(Status::Berserk);
+                                },
+
+                                _ => panic!("Unexpected entity type!"),
+                            }
                         },
 
                         Trap::Kill => {
+                            entity.typ.lose_hp(1000);
+                        },
+
+                        Trap::Teleport => {
+                            // get index of teleport trap
+                            let teleport_index = entities_clone.iter().enumerate().find(|(_, ent)| **ent == trap_entity).unwrap().0;
+                            // get entity list, starting from teleport trap and wrapping around
+                            let wrapped = entities_clone.iter()
+                                                        .skip(teleport_index)
+                                                        .chain(entities_clone.iter().take(teleport_index));
+                            // fidn next teleport. if one is find, move character there.
+                            for other_entity in wrapped {
+                                match other_entity.typ {
+                                    EntityType::Trap(Trap::Teleport) => {
+                                        entity.pos = other_entity.pos;
+                                    },
+
+                                    _ => { },
+                                }
+                            }
                         },
 
                         Trap::Bump => {
@@ -603,14 +684,21 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
     }
 }
 
+fn draw_entity(entity: &Entity, offset_px: Vector, window: &mut Window, char_map: &mut Asset<HashMap<u32, Image>>) {
+    let tile_size_px = Vector::new(TILE_WIDTH_PX, TILE_HEIGHT_PX);
+    let pos_px = entity.pos.times(tile_size_px);
+    let pos = offset_px + pos_px;
+    char_map.execute(|char_map| {
+        draw_char(&char_map, window, pos, entity.glyph, entity.color);
+        return Ok(());
+    }).unwrap();
+}
+
 // Draw Function
-fn draw_char(char_map: &HashMap<u32, Image>, window: &mut Window, pos: Vector, chr: char) {
+fn draw_char(char_map: &HashMap<u32, Image>, window: &mut Window, pos: Vector, chr: char, color: Color) {
     let char_ix = chr as u32;
-    let char_x = char_ix % 16;
-    let char_y = char_ix / 16;
-    //let char_pos = Vector::new(char_x * 16, char_y * 16);
     let rect = Rectangle::new(pos, Vector::new(16, 16));
-    window.draw(&rect, Img(&char_map[&char_ix]));
+    window.draw(&rect, Blended(&char_map[&char_ix], color));
 }
 
 fn main() {

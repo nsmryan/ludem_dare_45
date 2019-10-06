@@ -6,3 +6,6 @@ deploy:
 
 start:
   cargo web start
+
+check:
+  cargo watch -x check
