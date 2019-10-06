@@ -7,13 +7,16 @@ use quicksilver::prelude::*;
 
 
 // TODO 
-//      palette colors use
 //      map generation- groups of tiles, side step tile for Ls
-//      add status effects- chance for player or monster to take intended action
 //      another monster with different movement
-//      interpolate characters between tiles
 //      animations between frames
+//      add legend for currently avaiable tiles
+//
+//      add status effects- chance for player or monster to take intended action
 //      idle animations
+//      interpolate characters between tiles
+//
+//      palette colors use
 
 
 const TEXT_COLOR: Color = Color::WHITE;
@@ -197,6 +200,12 @@ fn generate_map(size: Vector) -> Vec<Tile> {
             };
             map.push(tile);
         }
+    }
+
+    for wall_index in 0..4 {
+        // TODO choose a point
+        //      walk a number of tiles
+        //      possibly add a tile to the side
     }
 
     return map;
