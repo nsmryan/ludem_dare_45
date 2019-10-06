@@ -8,3 +8,4 @@ edition = "2018"
 # More features: "collisions", "complex_shapes", "immi_ui", "sounds", "gamepads"
 quicksilver = { version = "0.3.10", default-features = false, features = ["fonts", "saving"]}
 rand = { version = "0.7", features = ["stdweb"] }
+noise = "0.6"

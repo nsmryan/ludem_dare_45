@@ -1,27 +1,34 @@
 use std::collections::HashMap;
 
 use rand::*;
+use noise::*;
 
 use quicksilver::prelude::*;
 
 
-// TODO add status effects
-//      idle animations
-//      animations between frames
+// TODO 
+//      fix teleport tile
+//      fix countdown tile
+//      color background tiles- blue-gray, each tile is different
+//      palette colors use
+//      map generation- groups of tiles, side step tile for Ls
+//      add status effects- chance for player or monster to take intended action
+//      another monster with different movement
 //      interpolate characters between tiles
-//      map generation
+//      animations between frames
+//      idle animations
 
 
 const TEXT_COLOR: Color = Color::WHITE;
 const BACKGROUND_COLOR: Color = Color::BLACK;
 
-const MAP_WIDTH: usize = 20;
-const MAP_HEIGHT: usize = 15;
+const MAP_WIDTH: usize = 10;
+const MAP_HEIGHT: usize = 10;
 
 const MAP_DRAW_X_OFFSET: usize  = 50;
 const MAP_DRAW_Y_OFFSET: usize  = 120;
-const TILE_WIDTH_PX: u32 = 24;
-const TILE_HEIGHT_PX: u32 = 24;
+const TILE_WIDTH_PX: u32 = 30; // 24;
+const TILE_HEIGHT_PX: u32 = 30; // 24;
 
 
 #[derive(Clone, Debug, PartialEq)]
@@ -50,10 +57,9 @@ type EntityId = usize;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Trap {
-    Berserk,
-    Kill,
-    Bump,
+    Berserk, Kill, Bump,
     Teleport,
+    CountDown(u8),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -180,7 +186,7 @@ fn generate_map(size: Vector) -> Vec<Tile> {
         for y in 0..height {
             let mut tile = Tile {
                 pos: Vector::new(x as f32, y as f32),
-                glyph: ' ',
+                glyph: 219 as char,
                 color: TEXT_COLOR,
                 blocks: false,
             };
@@ -235,8 +241,9 @@ impl Entity {
         let chr = match trap {
             Trap::Kill => '%',
             Trap::Berserk => '*',
-            Trap::Bump => '0',
+            Trap::Bump => '+',
             Trap::Teleport => '!',
+            Trap::CountDown(n) => ('0' as u8 + n) as char,
         };
 
         Entity {
@@ -268,6 +275,8 @@ fn generate_entities(entities: &mut Vec<Entity>) {
     entities.push(Entity::trap(Vector::new(7, 8), Trap::Kill)); 
     entities.push(Entity::trap(Vector::new(7, 2), Trap::Teleport)); 
     entities.push(Entity::trap(Vector::new(4, 8), Trap::Teleport)); 
+    entities.push(Entity::trap(Vector::new(1, 2), Trap::CountDown(3))); 
+    entities.push(Entity::trap(Vector::new(4, 2), Trap::CountDown(1)));
 }
 
 struct Game {
@@ -283,6 +292,7 @@ struct Game {
     entities: Vec<Entity>,
     player_id: usize,
     tileset: Asset<HashMap<char, Image>>,
+    noise: Perlin,
 }
 
 impl State for Game {
@@ -293,7 +303,7 @@ impl State for Game {
         let font_mononoki = "mononoki-Regular.ttf";
 
         let title = Asset::new(Font::load(font_mononoki).and_then(|font| {
-            font.render("Ludem Dare 45", &FontStyle::new(72.0, TEXT_COLOR))
+            font.render("Ludum Dare 45", &FontStyle::new(72.0, TEXT_COLOR))
         }));
 
         let font_image = "rexpaint16x16.png";
@@ -324,7 +334,7 @@ impl State for Game {
 
         let square_font_info = Asset::new(Font::load(font_mononoki).and_then(move |font| {
             font.render(
-                "A Ludem Dare Game by Joel and Noah Ryan",
+                "A Ludum Dare Game by Joel and Noah Ryan",
                 &FontStyle::new(20.0, TEXT_COLOR),
             )
         }));
@@ -346,7 +356,7 @@ impl State for Game {
             glyph: '@',
             color: Color::ORANGE,
             typ: EntityType::Player(Player { 
-                hp: 3,
+                hp: 5,
                 max_hp: 5,
                 status: None,
             }),
@@ -384,6 +394,7 @@ impl State for Game {
             entities,
             player_id,
             tileset,
+            noise: Perlin::new(),
         })
     }
 
@@ -463,23 +474,27 @@ impl State for Game {
         let tile_size_px = Vector::new(TILE_WIDTH_PX, TILE_HEIGHT_PX);
         let offset_px = Vector::new(MAP_DRAW_X_OFFSET as u8, MAP_DRAW_Y_OFFSET as u8);
 
-        // Draw the map
+        // draw map
         for tile in self.map.iter() {
             let pos_px = tile.pos.times(tile_size_px);
             let pos = offset_px + pos_px;
+            let color_noise = self.noise.get([pos.x as f64, pos.y as f64]);
+            // TODO use palette for mixing
             self.char_map.execute(|char_map| {
                 draw_char(&char_map, window, pos, tile.glyph, tile.color);
                 return Ok(());
             });
         }
 
-        // Draw entities
+        // draw entities
+        // draw traps
         for entity in self.entities.iter() {
             if entity.typ.is_trap() {
                 draw_entity(entity, offset_px, window, &mut self.char_map);
             }
         }
 
+        // draw other entities
         for entity in self.entities.iter() {
             if !entity.typ.is_trap() {
                 draw_entity(entity, offset_px, window, &mut self.char_map);
@@ -623,9 +638,16 @@ fn update_player(game: &mut Game, window: &mut Window) -> bool {
 fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
     let mut rng = thread_rng();
     let entities_clone = entities.clone();
+    let mut removals: Vec<usize> = Vec::new();
+    let mut count_downs: Vec<(usize, u8)> = Vec::new();
 
-    for entity in entities.iter_mut().filter(|ent| ent.typ.is_player() || ent.typ.is_monster()) {
+    let trap_iter =
+        entities.iter_mut()
+                .enumerate()
+                .filter(|(_index, ent)| ent.typ.is_player() || ent.typ.is_monster());
+    for (index, entity) in trap_iter {
         if let Some(trap_entity) = trap_tile(entity.pos, &entities_clone) {
+            let trap_index = entities_clone.iter().position(|other| *other == trap_entity).unwrap();
             match trap_entity.typ {
                 EntityType::Trap(trap) => {
                     match trap {
@@ -644,21 +666,20 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
                         },
 
                         Trap::Kill => {
-                            entity.typ.lose_hp(1000);
+                            entity.typ.lose_hp(5);
+                            removals.push(trap_index);
                         },
 
                         Trap::Teleport => {
-                            // get index of teleport trap
-                            let teleport_index = entities_clone.iter().enumerate().find(|(_, ent)| **ent == trap_entity).unwrap().0;
-                            // get entity list, starting from teleport trap and wrapping around
-                            let wrapped = entities_clone.iter()
-                                                        .skip(teleport_index)
-                                                        .chain(entities_clone.iter().take(teleport_index));
-                            // fidn next teleport. if one is find, move character there.
-                            for other_entity in wrapped {
+                            // find next teleport. if one is find, move character there.
+                            let entities_len = entities_clone.len();
+                            for other_index in 0..entities_len {
+                                let offset_index = (other_index + trap_index + 1) % entities_len;
+                                let other_entity = &entities_clone[offset_index];
                                 match other_entity.typ {
                                     EntityType::Trap(Trap::Teleport) => {
                                         entity.pos = other_entity.pos;
+                                        break;
                                     },
 
                                     _ => { },
@@ -675,12 +696,31 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
                                              Vector::new(x_offset, y_offset),
                                              &map);
                         }
+
+                        Trap::CountDown(mut n) => {
+                            if n == 0 {
+                                entity.typ.lose_hp(5);
+                            } else {
+                                count_downs.push((trap_index, n - 1));
+                            }
+                        },
                     }
                 },
 
                 _ => panic!("Unreachable?"),
             }
         }
+    }
+
+    for (ix, new_n) in count_downs.iter() {
+        entities[*ix].typ = EntityType::Trap(Trap::CountDown(*new_n));
+        entities[*ix].glyph = ('0' as u8 + *new_n) as char;
+    }
+
+    removals.sort();
+    removals.reverse();
+    for index in removals.iter() {
+        entities.swap_remove(*index);
     }
 }
 
@@ -698,7 +738,10 @@ fn draw_entity(entity: &Entity, offset_px: Vector, window: &mut Window, char_map
 fn draw_char(char_map: &HashMap<u32, Image>, window: &mut Window, pos: Vector, chr: char, color: Color) {
     let char_ix = chr as u32;
     let rect = Rectangle::new(pos, Vector::new(16, 16));
-    window.draw(&rect, Blended(&char_map[&char_ix], color));
+    window.draw_ex(&rect,
+                   Blended(&char_map[&char_ix], color),
+                   Transform::scale(Vector::new(2.0, 2.0)),
+                   2.0);
 }
 
 fn main() {

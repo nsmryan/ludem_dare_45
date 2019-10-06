@@ -9,3 +9,6 @@ start:
 
 check:
   cargo watch -x check
+
+run:
+  cargo run
