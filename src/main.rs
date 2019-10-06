@@ -19,7 +19,6 @@ use quicksilver::prelude::*;
 //      palette colors use
 
 
-const TEXT_COLOR: Color = Color::WHITE;
 const BACKGROUND_COLOR: Color = Color::BLACK;
 
 const WINDOW_WIDTH: u32 = 800;
@@ -32,6 +31,16 @@ const MAP_DRAW_X_OFFSET: usize  = 50;
 const MAP_DRAW_Y_OFFSET: usize  = 120;
 const TILE_WIDTH_PX: u32 = 30; // 24;
 const TILE_HEIGHT_PX: u32 = 30; // 24;
+
+static red: Color = Color { r: 161.0 / 255.0, b: 22.0 / 255.0, g: 52.0 / 255.0, a: 1.0 };
+static dark_green: Color = Color { r: 25.0 / 255.0, b: 69.0 / 255.0, g: 35.0 / 255.0, a: 1.0 };
+static green: Color = Color { r: 15.0 / 255.0, b: 128.0 / 255.0, g: 55.0 / 255.0, a: 1.0 };
+static bright_blue: Color = Color { r: 101.0 / 255.0, b: 233.0 / 255.0, g: 228.0 / 255.0, a: 1.0 };
+static dark_orange: Color = Color { r: 186.0 / 255.0, b: 98.0 / 255.0, g: 20.0 / 255.0, a: 1.0 };
+static orange: Color = Color { r: 255.0 / 255.0, b: 138.0 / 255.0, g: 0.0 / 255.0, a: 1.0 };
+static white: Color = Color { r: 238.0 / 255.0, b: 243.0 / 255.0, g: 244.0 / 255.0, a: 1.0 };
+static dark_gray: Color = Color { r: 81.0 / 255.0, b: 97.0 / 255.0, g: 102.0 / 255.0, a: 1.0 };
+static light_gray: Color = Color { r: 120.0 / 255.0, b: 128.0 / 255.0, g: 144.0 / 255.0, a: 1.0 };
 
 
 #[derive(Clone, Debug, PartialEq)]
@@ -190,7 +199,7 @@ fn generate_map(size: Vector) -> Vec<Tile> {
             let mut tile = Tile {
                 pos: Vector::new(x as f32, y as f32),
                 glyph: 219 as char,
-                color: TEXT_COLOR,
+                color: white,
                 blocks: false,
             };
 
@@ -258,7 +267,7 @@ impl Entity {
         Entity {
             pos: pos,
             glyph: chr,
-            color: Color::GREEN,
+            color: green,
             typ: EntityType::trap(trap),
         }
     }
@@ -267,7 +276,7 @@ impl Entity {
         Entity {
             pos: pos,
             glyph: 'g',
-            color: Color::RED,
+            color: red,
             typ: EntityType::monster(1),
         }
     }
@@ -281,7 +290,7 @@ fn generate_entities(entities: &mut Vec<Entity>) {
     entities.push(Entity::trap(Vector::new(3, 8), Trap::Berserk)); 
     entities.push(Entity::trap(Vector::new(9, 8), Trap::Berserk)); 
     entities.push(Entity::trap(Vector::new(7, 6), Trap::Kill)); 
-    entities.push(Entity::trap(Vector::new(7, 8), Trap::Kill)); 
+    entities.push(Entity::trap(Vector::new(7, 7), Trap::Kill)); 
     entities.push(Entity::trap(Vector::new(7, 2), Trap::Teleport)); 
     entities.push(Entity::trap(Vector::new(4, 8), Trap::Teleport)); 
     entities.push(Entity::trap(Vector::new(1, 2), Trap::CountDown(3))); 
@@ -312,7 +321,7 @@ impl State for Game {
         let font_mononoki = "mononoki-Regular.ttf";
 
         let title = Asset::new(Font::load(font_mononoki).and_then(|font| {
-            font.render("Ludum Dare 45", &FontStyle::new(72.0, TEXT_COLOR))
+            font.render("Ludum Dare 45", &FontStyle::new(72.0, white))
         }));
 
         let font_image = "rexpaint16x16.png";
@@ -331,27 +340,27 @@ impl State for Game {
         }));
 
         let lost_game_message = Asset::new(Font::load(font_mononoki).and_then(|font| {
-            font.render("You Lose!", &FontStyle::new(72.0, TEXT_COLOR))
+            font.render("You Lose!", &FontStyle::new(72.0, white))
         }));
 
         let mononoki_font_info = Asset::new(Font::load(font_mononoki).and_then(|font| {
             font.render(
                 "",
-                &FontStyle::new(20.0, TEXT_COLOR),
+                &FontStyle::new(20.0, white),
             )
         }));
 
         let square_font_info = Asset::new(Font::load(font_mononoki).and_then(move |font| {
             font.render(
                 "A Ludum Dare Game by Joel and Noah Ryan",
-                &FontStyle::new(20.0, TEXT_COLOR),
+                &FontStyle::new(20.0, white),
             )
         }));
 
         let inventory = Asset::new(Font::load(font_mononoki).and_then(move |font| {
             font.render(
                 "Inventory:\n[A] Sword\n[B] Shield\n[C] Darts",
-                &FontStyle::new(20.0, TEXT_COLOR),
+                &FontStyle::new(20.0, white),
             )
         }));
 
@@ -379,7 +388,7 @@ impl State for Game {
         let tile_size_px = Vector::new(TILE_WIDTH_PX, TILE_HEIGHT_PX);
         let tileset = Asset::new(Font::load(font_square).and_then(move |text| {
             let tiles = text
-                .render(game_glyphs, &FontStyle::new(tile_size_px.y, TEXT_COLOR))
+                .render(game_glyphs, &FontStyle::new(tile_size_px.y, white))
                 .expect("Could not render the font tileset.");
             let mut tileset = HashMap::new();
             for (index, glyph) in game_glyphs.chars().enumerate() {
@@ -490,12 +499,7 @@ impl State for Game {
             let color_noise =
                 self.noise.get([6.0 * (pos.x as f64 / WINDOW_WIDTH as f64),
                                 6.0 * (pos.y as f64 / WINDOW_HEIGHT as f64)]);
-            dbg!(color_noise);
-            dbg!(pos);
-            // TODO use palette for mixing
-            let dark_tile_color = Color::from_rgba(120, 128, 144, 1.0);
-            let light_tile_color = Color::from_rgba(81, 97, 102, 1.0);
-            let tile_color = lerp_color(dark_tile_color, light_tile_color, color_noise as f32);
+            let tile_color = lerp_color(dark_gray, light_gray, color_noise as f32);
             self.char_map.execute(|char_map| {
                 draw_char(&char_map, window, pos, tile.glyph, tile_color);
                 return Ok(());
