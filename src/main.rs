@@ -25,8 +25,8 @@ const MAP_HEIGHT: usize = 10;
 
 const MAP_DRAW_X_OFFSET: usize  = 200;
 const MAP_DRAW_Y_OFFSET: usize  = 120;
-const TILE_WIDTH_PX: u32 = 40;
-const TILE_HEIGHT_PX: u32 = 40;
+const TILE_WIDTH_PX: u32 = 35;
+const TILE_HEIGHT_PX: u32 = 35;
 
 const MILLIS_PER_UPDATE: f64 = 0.5;
 const IDLE_PROB: f32 = 1.0;
@@ -473,6 +473,8 @@ fn generate_entities(last_level: bool, entities: &mut Vec<Entity>, map: &Map) ->
         entities.push(Entity::trap(positions.next().unwrap(), Trap::Kill));
         entities.push(Entity::trap(positions.next().unwrap(), Trap::Kill));
         entities.push(Entity::trap(positions.next().unwrap(), Trap::Kill));
+        entities.push(Entity::trap(positions.next().unwrap(), Trap::Teleport));
+        entities.push(Entity::trap(positions.next().unwrap(), Trap::Teleport));
         entities.push(Entity::trap(positions.next().unwrap(), Trap::Arrow(Arrow::Left)));
         entities.push(Entity::trap(positions.next().unwrap(), Trap::Arrow(Arrow::Right)));
         entities.push(Entity::trap(positions.next().unwrap(), Trap::Arrow(Arrow::Up)));
@@ -1564,7 +1566,6 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map, animations: &mut Vec<Ani
                         },
 
                         Trap::NextLevel => {
-                            dbg!();
                             if entity.typ.is_player() {
                                 *next_level = true;
                             }
