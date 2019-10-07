@@ -11,6 +11,8 @@ use quicksilver::prelude::*;
 //
 
 
+const NUM_LEVEL_GAME: usize = 3;
+
 const BACKGROUND_COLOR: Color = Color::BLACK;
 const SCALE: f32 = 2.5;
 
@@ -53,8 +55,10 @@ static TRAP_COLOR: Color = ORANGE;
 
 #[derive(Clone, Debug, PartialEq)]
 enum GameState {
-    Playing,
+    Playing(usize),
     Lost,
+    NextLevel(usize),
+    Win,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -445,7 +449,7 @@ fn map_unique_pos(map: Map) -> impl Iterator<Item=Vector> {
     });
 }
 
-fn generate_entities(entities: &mut Vec<Entity>, map: &Map) -> Vector {
+fn generate_entities(last_level: bool, entities: &mut Vec<Entity>, map: &Map) -> Vector {
     let player_pos;
 
     if false {
@@ -478,7 +482,12 @@ fn generate_entities(entities: &mut Vec<Entity>, map: &Map) -> Vector {
         entities.push(Entity::trap(positions.next().unwrap(), Trap::Arrow(Arrow::Right)));
         entities.push(Entity::trap(positions.next().unwrap(), Trap::Arrow(Arrow::Up)));
         entities.push(Entity::trap(positions.next().unwrap(), Trap::Arrow(Arrow::Down)));
-        entities.push(Entity::trap(positions.next().unwrap(), Trap::NextLevel));
+
+        if last_level {
+            entities.push(Entity::trap(positions.next().unwrap(), Trap::Win));
+        } else {
+            entities.push(Entity::trap(positions.next().unwrap(), Trap::NextLevel));
+        }
 
         player_pos = positions.next().unwrap();
     }
@@ -492,6 +501,7 @@ struct Game {
     mononoki_font_info: Asset<Image>,
     square_font_info: Asset<Image>,
     lost_game_message: Asset<Image>,
+    win_game_message: Asset<Image>,
     char_map: Asset<HashMap<u32, Image>>,
     inventory: Asset<Image>,
     map_size: Vector,
@@ -814,6 +824,10 @@ impl State for Game {
             font.render("You Lose!", &FontStyle::new(72.0, WHITE))
         }));
 
+        let win_game_message = Asset::new(Font::load(font_mononoki).and_then(|font| {
+            font.render("You Win!", &FontStyle::new(72.0, WHITE))
+        }));
+
         let mononoki_font_info = Asset::new(Font::load(font_mononoki).and_then(|font| {
             font.render(
                 "",
@@ -856,7 +870,7 @@ impl State for Game {
         });
         map[player_start.y as usize + player_start.x as usize * MAP_HEIGHT] =
             Tile::wall(player_start.x as usize, player_start.y as usize);
-        let player_pos = generate_entities(&mut entities, &map);
+        let player_pos = generate_entities(false, &mut entities, &map);
         entities[0].pos = player_pos;
 
         for tile in map.iter_mut() {
@@ -884,11 +898,12 @@ impl State for Game {
         }));
 
         Ok(Self {
-            game_state: GameState::Playing,
+            game_state: GameState::Playing(0),
             title,
             mononoki_font_info,
             square_font_info,
             lost_game_message,
+            win_game_message,
             char_map,
             inventory,
             map_size,
@@ -926,15 +941,52 @@ impl State for Game {
     fn update(&mut self, window: &mut Window) -> Result<()> {
 
         match self.game_state {
-            GameState::Playing => {
+            GameState::Win => {
+                let stairs_pos = self.entities.iter().find(|ent| {
+                    match ent.typ {
+                        EntityType::Trap(Trap::Win) => true,
+                        _ => false,
+                    }
+                }).unwrap().pos;
+                self.entities[0].pos = stairs_pos;
+            }
+
+            GameState::NextLevel(n) => {
+                if n >= NUM_LEVEL_GAME {
+                    self.game_state = GameState::Win;
+                } else {
+                    let map_size = Vector::new(MAP_WIDTH as u8, MAP_HEIGHT as u8);
+                    let mut map = generate_map(map_size);
+                    self.map = generate_map(map_size);
+
+                    let player = self.entities[0].clone();
+                    self.entities.clear();
+                    self.entities.push(player);
+                    let player_pos = generate_entities(n + 1 == NUM_LEVEL_GAME, &mut self.entities, &self.map);
+                    self.entities[0].pos = player_pos;
+
+                    self.game_state = GameState::Playing(n + 1);
+                }
+            }
+
+            GameState::Playing(n) => {
                 let took_turn = update_player(self, window);
 
                 self.time_passed += MILLIS_PER_UPDATE / 1000.0;
-
                 if took_turn {
                     self.time_passed = 0.0;
+
+                    let mut win = false;
+                    let mut next_level = false;
+
                     update_monsters(self, window);
-                    resolve_traps(&mut self.entities, &self.map, &mut self.animations);
+                    resolve_traps(&mut self.entities, &self.map, &mut self.animations, &mut next_level, &mut win);
+
+                    if next_level {
+                        self.game_state = GameState::NextLevel(n);
+                    } else if win {
+                        self.game_state = GameState::Win;
+                    }
                 }
 
                 if window.keyboard()[Key::Escape].is_down() {
@@ -1125,8 +1177,6 @@ impl State for Game {
                                 return Ok(());
                             }).unwrap();
                         },
-
-                        _ => continue,
                     }
                 }
             }
@@ -1235,6 +1285,18 @@ impl State for Game {
             })?;
         }
 
+        if self.game_state == GameState::Win {
+            self.win_game_message.execute(|image| {
+                window.draw(
+                    &image
+                        .area()
+                        .translate((MAP_DRAW_X_OFFSET as u16 + 40, WINDOW_HEIGHT as u16 - 100)),
+                    Img(&image),
+                );
+                Ok(())
+            })?;
+        }
+
         //let mut rng = thread_rng();
         //for entity in self.entities.iter_mut() {
         //    if (entity.typ.is_monster() || entity.typ.is_player()) &&
@@ -1322,9 +1384,9 @@ fn update_monsters(game: &mut Game, _window: &mut Window) {
 
         // only monsters have attack animations
         match game.entities[attack.0].typ {
-            EntityType::Monster(monster) => {
+            EntityType::Monster(_monster) => {
                 let pos = game.entities[attack.0].pos;
-                let anim = Animation::MonsterAttack(monster.typ.clone(), pos, 0);
+                //let anim = Animation::MonsterAttack(monster.typ.clone(), pos, 0);
                 // TODO removes this kind of animation for attacks...
                 //game.animations.push(anim);
             },
@@ -1407,7 +1469,7 @@ fn update_player(game: &mut Game, window: &mut Window) -> bool {
     return took_turn;
 }
 
-fn resolve_traps(entities: &mut Vec<Entity>, map: &Map, animations: &mut Vec<Animation>) {
+fn resolve_traps(entities: &mut Vec<Entity>, map: &Map, animations: &mut Vec<Animation>, next_level: &mut bool, win: &mut bool) {
     let mut rng = thread_rng();
     let entities_clone = entities.clone();
     let mut removals: Vec<usize> = Vec::new();
@@ -1490,11 +1552,16 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map, animations: &mut Vec<Ani
                         },
 
                         Trap::NextLevel => {
-                            // regenerate map
+                            dbg!();
+                            if entity.typ.is_player() {
+                                *next_level = true;
+                            }
                         }
 
                         Trap::Win => {
-                            // set win flag
+                            if entity.typ.is_player() {
+                                *win = true;
+                            }
                         }
 
                         Trap::Arrow(dir) => {
@@ -1588,7 +1655,7 @@ fn draw_entity(entity: &Entity,
                pos: Vector,
                window: &mut Window,
                char_map: &mut Asset<HashMap<u32, Image>>) {
-    let color = 
+    let _color = 
         match entity.typ {
             EntityType::Monster(monster) => {
                 if monster.status == Some(Status::Berserk) {
