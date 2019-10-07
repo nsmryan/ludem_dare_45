@@ -8,7 +8,13 @@ start:
   cargo web start
 
 check:
+  cargo check
+
+recheck:
   cargo watch -x check
 
 run:
   cargo run
+
+rerun:
+  cargo watch -x run

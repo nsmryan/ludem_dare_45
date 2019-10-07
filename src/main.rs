@@ -7,18 +7,22 @@ use quicksilver::prelude::*;
 
 
 // TODO 
-//      map generation- placement of enemies and traps
-//      animations between frames
-//      add legend for currently avaiable tiles
+//      attack animation
 //
-//      add status effects- chance for player or monster to take intended action
-//      interpolate characters between tiles
+//      winning condition
+//
+//      player idle
+//
+//      add wall meld
+//
 
 
 const BACKGROUND_COLOR: Color = Color::BLACK;
 const SCALE: f32 = 2.5;
 
 const WALL_CHAR: char = 2 as char;
+const ITERP_TIME: f64 = 0.15;
+const DRAWS_PER_IDLE_FRAME: usize = 2;
 
 const WINDOW_WIDTH: u32 = 800;
 const WINDOW_HEIGHT: u32 = 600;
@@ -31,7 +35,9 @@ const MAP_DRAW_Y_OFFSET: usize  = 120;
 const TILE_WIDTH_PX: u32 = 40;
 const TILE_HEIGHT_PX: u32 = 40;
 
+const MILLIS_PER_UPDATE: f64 = 0.5;
 const IDLE_PROB: f32 = 1.0;
+const PLAYER_CHARACTER: char = 139 as char;
 
 static RED: Color         = Color { r: 161.0 / 255.0, g: 22.0  / 255.0, b: 52.0  / 255.0, a: 1.0 };
 static DARK_GREEN: Color  = Color { r: 25.0  / 255.0, g: 69.0  / 255.0, b: 35.0  / 255.0, a: 1.0 };
@@ -40,11 +46,13 @@ static BRIGHT_BLUE: Color = Color { r: 101.0 / 255.0, g: 233.0 / 255.0, b: 228.0
 static DARK_ORANGE: Color = Color { r: 186.0 / 255.0, g: 98.0  / 255.0, b: 20.0  / 255.0, a: 1.0 };
 static ORANGE: Color      = Color { r: 255.0 / 255.0, g: 138.0 / 255.0, b: 0.0   / 255.0, a: 1.0 };
 static WHITE: Color       = Color { r: 238.0 / 255.0, g: 243.0 / 255.0, b: 244.0 / 255.0, a: 1.0 };
-static DARK_GRAY: Color   = Color { r: 81.0  / 255.0, g: 97.0  / 255.0, b: 102.0 / 255.0, a: 1.0 };
-static LIGHT_GRAY: Color  = Color { r: 120.0 / 255.0, g: 128.0 / 255.0, b: 144.0 / 255.0, a: 1.0 };
+static VERY_GRAY: Color   = Color { r: 29.0  / 255.0, g: 30.0  / 255.0, b: 32.0  / 255.0, a: 1.0 };
+static DARK_GRAY: Color   = Color { r: 54.0  / 255.0, g: 56.0  / 255.0, b: 49.0  / 255.0, a: 1.0 };
+static LIGHT_GRAY: Color  = Color { r: 76.0  / 255.0, g: 79.0  / 255.0, b: 84.0  / 255.0, a: 1.0 };
 static STONE_GRAY: Color  = Color { r: 67.0  / 255.0, g: 59.0  / 255.0, b: 62.0  / 255.0, a: 1.0 };
+static LIGHT_BROWN: Color = Color { r: 158.0 / 255.0, g: 134.0 / 255.0, b: 100.0 / 255.0, a: 1.0 };
 
-static MONSTER_COLOR: Color = LIGHT_GRAY;
+static MONSTER_COLOR: Color = LIGHT_BROWN;
 static TRAP_COLOR: Color = ORANGE;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -91,10 +99,14 @@ enum Arrow {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Trap {
-    Berserk, Kill, Bump,
+    Berserk,
+    Kill,
+    Bump,
     Teleport,
     CountDown(u8),
     Arrow(Arrow),
+    NextLevel,
+    Win,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -228,6 +240,10 @@ impl HasHp for Entity {
 
 type Map = Vec<Tile>;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Animation {
+    MonsterAttack(MonsterType, Vector, usize),
+}
 
 fn generate_map(size: Vector) -> Vec<Tile> {
     let width = size.x as usize;
@@ -301,6 +317,10 @@ fn trap_tile(pos: Vector, entities: &Vec<Entity>) -> Option<Entity> {
     return entities.iter().find(|entity| entity.typ.is_trap() && entity.pos == pos).map(|entity| entity.clone());
 }
 
+fn magnitude(vec: Vector) -> f32 {
+    return (vec.x.powi(2) + vec.y.powi(2)).sqrt();
+}
+
 fn clamp(min: f32, max: f32, value: f32) -> f32 {
     let result: f32;
 
@@ -317,6 +337,7 @@ fn clamp(min: f32, max: f32, value: f32) -> f32 {
 
 #[derive(Clone, Debug, PartialEq)]
 struct Entity {
+    last_pos: Vector,
     pos: Vector,
     glyph: char,
     color: Color,
@@ -326,8 +347,14 @@ struct Entity {
 
 impl Entity {
     fn trap(pos: Vector, trap: Trap) -> Entity {
+        let color = match trap {
+            Trap::NextLevel => WHITE,
+            Trap::Win => WHITE,
+            _ => TRAP_COLOR,
+        };
+
         let chr = match trap {
-            Trap::Kill => '%',
+            Trap::Kill => 137 as char,
             Trap::Berserk => '*',
             Trap::Bump => '+',
             Trap::Teleport => '!',
@@ -340,12 +367,15 @@ impl Entity {
                     Arrow::Down => 31 as char,
                 }
             }
+            Trap::NextLevel => 127 as char,
+            Trap::Win => 255 as char,
         };
 
         Entity {
+            last_pos: pos,
             pos: pos,
             glyph: chr,
-            color: TRAP_COLOR,
+            color: color,
             typ: EntityType::trap(trap),
             idle: None,
         }
@@ -353,6 +383,7 @@ impl Entity {
 
     fn gol(pos: Vector) -> Entity {
         Entity {
+            last_pos: pos,
             pos: pos,
             glyph: 152 as char,
             color: MONSTER_COLOR,
@@ -363,6 +394,7 @@ impl Entity {
 
     fn rook(pos: Vector) -> Entity {
         Entity {
+            last_pos: pos,
             pos: pos,
             glyph: 130 as char,
             color: MONSTER_COLOR,
@@ -372,20 +404,64 @@ impl Entity {
     }
 }
 
-fn generate_entities(entities: &mut Vec<Entity>) {
-    entities.push(Entity::gol(Vector::new(4, 4)));
-    entities.push(Entity::rook(Vector::new(2, 1)));
-    entities.push(Entity::trap(Vector::new(6, 6), Trap::Bump)); 
-    entities.push(Entity::trap(Vector::new(8, 8), Trap::Berserk)); 
-    entities.push(Entity::trap(Vector::new(3, 8), Trap::Berserk)); 
-    entities.push(Entity::trap(Vector::new(4, 2), Trap::Arrow(Arrow::Left))); 
-    entities.push(Entity::trap(Vector::new(4, 3), Trap::Arrow(Arrow::Left))); 
-    entities.push(Entity::trap(Vector::new(4, 4), Trap::Arrow(Arrow::Left))); 
-    entities.push(Entity::trap(Vector::new(7, 6), Trap::Kill)); 
-    entities.push(Entity::trap(Vector::new(7, 7), Trap::Kill)); 
-    entities.push(Entity::trap(Vector::new(7, 2), Trap::Teleport)); 
-    entities.push(Entity::trap(Vector::new(4, 8), Trap::Teleport)); 
-    entities.push(Entity::trap(Vector::new(1, 2), Trap::CountDown(3))); 
+fn map_pos<R: Rng>(rng: &mut R) -> Vector {
+    return Vector::new(rng.gen_range(1, MAP_WIDTH as u16 - 1),
+                       rng.gen_range(1, MAP_HEIGHT as u16 - 1));
+}
+
+fn map_unique_pos(map: Map) -> impl Iterator<Item=Vector> {
+    let mut rng = thread_rng();
+    let mut positions: Vec<Vector> = Vec::new();
+    return std::iter::from_fn(move || {
+        let mut new_pos = map_pos(&mut rng);
+        while positions.iter().find(|pos| **pos == new_pos).is_some() ||
+              map[new_pos.y as usize + new_pos.x as usize * MAP_HEIGHT].blocks {
+            new_pos = map_pos(&mut rng);
+        }
+
+        positions.push(new_pos);
+
+        return Some(new_pos);
+    });
+}
+
+fn generate_entities(entities: &mut Vec<Entity>, map: &Map) -> Vector {
+    let player_pos;
+
+    if false {
+        entities.push(Entity::gol(Vector::new(4, 4)));
+        entities.push(Entity::rook(Vector::new(2, 1)));
+        entities.push(Entity::trap(Vector::new(6, 6), Trap::Bump)); 
+        entities.push(Entity::trap(Vector::new(3, 8), Trap::Berserk)); 
+        entities.push(Entity::trap(Vector::new(4, 2), Trap::Arrow(Arrow::Left))); 
+        entities.push(Entity::trap(Vector::new(4, 3), Trap::Arrow(Arrow::Left))); 
+        entities.push(Entity::trap(Vector::new(4, 4), Trap::Arrow(Arrow::Left))); 
+        entities.push(Entity::trap(Vector::new(7, 6), Trap::Kill)); 
+        entities.push(Entity::trap(Vector::new(7, 7), Trap::Kill)); 
+        entities.push(Entity::trap(Vector::new(7, 2), Trap::Teleport)); 
+        entities.push(Entity::trap(Vector::new(4, 8), Trap::Teleport)); 
+        entities.push(Entity::trap(Vector::new(1, 2), Trap::CountDown(3))); 
+        entities.push(Entity::trap(Vector::new(8, 8), Trap::NextLevel));
+
+        player_pos = Vector::new(3, 4);
+    } else {
+        let mut positions = map_unique_pos(map.clone());
+
+        entities.push(Entity::gol(positions.next().unwrap()));
+        entities.push(Entity::rook(positions.next().unwrap()));
+        entities.push(Entity::trap(positions.next().unwrap(), Trap::Bump));
+        entities.push(Entity::trap(positions.next().unwrap(), Trap::Kill));
+        entities.push(Entity::trap(positions.next().unwrap(), Trap::Kill));
+        entities.push(Entity::trap(positions.next().unwrap(), Trap::Arrow(Arrow::Left)));
+        entities.push(Entity::trap(positions.next().unwrap(), Trap::Arrow(Arrow::Right)));
+        entities.push(Entity::trap(positions.next().unwrap(), Trap::Arrow(Arrow::Up)));
+        entities.push(Entity::trap(positions.next().unwrap(), Trap::Arrow(Arrow::Down)));
+        entities.push(Entity::trap(positions.next().unwrap(), Trap::NextLevel));
+
+        player_pos = positions.next().unwrap();
+    }
+
+    return player_pos;
 }
 
 struct Game {
@@ -405,6 +481,8 @@ struct Game {
     gol_idle: Asset<Vec<Image>>,
     rook_idle: Asset<Vec<Image>>,
     player_idle: Asset<Vec<Image>>,
+    time_passed: f64,
+    animations: Vec<Animation>,
 }
 
 impl State for Game {
@@ -462,7 +540,7 @@ impl State for Game {
         let player_idle = Asset::new(Image::load(player_idle_name).and_then(|image| {
             let mut player_idle = Vec::new();
             let anim_size = Vector::new(16, 16);
-            for image_index in 0..10 {
+            for image_index in 0..8 {
                 let pos = Vector::new(image_index * 16, 0);
                 player_idle.push(image.subimage(Rectangle::new(pos, anim_size)));
             }
@@ -497,22 +575,33 @@ impl State for Game {
         }));
 
         let map_size = Vector::new(MAP_WIDTH as u8, MAP_HEIGHT as u8);
-        let map = generate_map(map_size);
+        let mut map = generate_map(map_size);
         let player_id = 0;
 
+        let player_start = Vector::new(5, 3);
         let mut entities = Vec::new();
         entities.push(Entity {
+            last_pos: player_start,
             pos: Vector::new(5, 3),
-            glyph: '@',
-            color: GREEN,
+            glyph: PLAYER_CHARACTER,
+            color: WHITE,
             typ: EntityType::Player(Player { 
                 hp: 5,
                 max_hp: 5,
                 status: None,
             }),
-            idle: None,
+            idle: Some(0),
         });
-        generate_entities(&mut entities);
+        map[player_start.y as usize + player_start.x as usize * MAP_HEIGHT] =
+            Tile::wall(player_start.x as usize, player_start.y as usize);
+        let player_pos = generate_entities(&mut entities, &map);
+        entities[0].pos = player_pos;
+
+        for tile in map.iter_mut() {
+            if occupied_tile(tile.pos, &entities).is_some() {
+                *tile = Tile::wall(tile.pos.x as usize, tile.pos.y as usize);
+            }
+        }
 
         // The Square font: http://strlen.com/square/?s[]=font
         // License: CC BY 3.0 https://creativecommons.org/licenses/by/3.0/deed.en_US
@@ -549,6 +638,8 @@ impl State for Game {
             gol_idle,
             rook_idle,
             player_idle,
+            time_passed: 0.0,
+            animations: Vec::new(),
         })
     }
 
@@ -559,7 +650,10 @@ impl State for Game {
             GameState::Playing => {
                 let took_turn = update_player(self, window);
 
+                self.time_passed += MILLIS_PER_UPDATE / 1000.0;
+
                 if took_turn {
+                    self.time_passed = 0.0;
                     update_monsters(self, window);
                     resolve_traps(&mut self.entities, &self.map);
                 }
@@ -635,7 +729,10 @@ impl State for Game {
             let color_noise =
                 self.noise.get([6.0 * (pos.x as f64 / WINDOW_WIDTH as f64),
                                 6.0 * (pos.y as f64 / WINDOW_HEIGHT as f64)]);
-            let tile_color = lerp_color(DARK_GRAY, LIGHT_GRAY, color_noise as f32);
+            let mut tile_color = lerp_color(DARK_GRAY, LIGHT_GRAY, color_noise as f32);
+            if tile.blocks {
+                tile_color = LIGHT_GRAY;
+            }
             self.char_map.execute(|char_map| {
                 draw_char(&char_map, window, pos, tile.glyph, tile_color);
                 return Ok(());
@@ -646,25 +743,39 @@ impl State for Game {
         // draw traps
         for entity in self.entities.iter() {
             if entity.typ.is_trap() {
-                draw_entity(entity, offset_px, window, &mut self.char_map);
+                let tile_size_px = Vector::new(TILE_WIDTH_PX, TILE_HEIGHT_PX);
+                let pos_px = entity.pos.times(tile_size_px);
+                let pos = offset_px + pos_px;
+                draw_entity(entity, pos, window, &mut self.char_map);
             }
         }
 
         // draw other entities
         for entity in self.entities.iter_mut() {
+            let tile_size_px = Vector::new(TILE_WIDTH_PX, TILE_HEIGHT_PX);
+            let ent_pos = entity.pos;
+            let last_ent_pos = entity.last_pos;
+            let lerp_amount = clamp(0.0, ITERP_TIME as f32, self.time_passed as f32) / ITERP_TIME as f32;
+            let ent_pos = Vector::new(lerp(last_ent_pos.x, ent_pos.x, lerp_amount),
+                                      lerp(last_ent_pos.y, ent_pos.y, lerp_amount));
+            if magnitude(ent_pos - entity.pos) < 0.01 {
+                entity.last_pos = entity.pos;
+            }
+            let pos_px = ent_pos.times(tile_size_px);
+            let pos = offset_px + pos_px;
+
             match entity.idle {
                 None => {
-                    draw_entity(entity, offset_px, window, &mut self.char_map);
+                    draw_entity(entity, pos, window, &mut self.char_map);
                 }
 
                 Some(index) => {
-                    let tile_size_px = Vector::new(TILE_WIDTH_PX, TILE_HEIGHT_PX);
-                    let pos_px = entity.pos.times(tile_size_px);
-                    let pos = offset_px + pos_px;
                     match entity.typ {
-                        EntityType::Monster(monster) => {
+                        EntityType::Monster(_) | EntityType::Player(_) => {
                             let idle_anims;
-                            if entity.typ.is_rook() {
+                            if entity.typ.is_player() {
+                                idle_anims = &mut self.player_idle;
+                            } else if entity.typ.is_rook() {
                                 idle_anims = &mut self.rook_idle;
                             } else {
                                 idle_anims = &mut self.gol_idle;
@@ -672,20 +783,18 @@ impl State for Game {
                             idle_anims.execute(|idle_anims| {
                                 let rect = Rectangle::new(pos,
                                                           Vector::new(16, 16));
+                                let anim_index = index / DRAWS_PER_IDLE_FRAME;
                                 window.draw_ex(&rect,
-                                               Blended(&idle_anims[index], entity.color),
+                                               Blended(&idle_anims[anim_index], entity.color),
                                                Transform::scale(Vector::new(SCALE, SCALE)),
                                                SCALE);
-                                if (index + 1) >= idle_anims.len() {
+                                if (index + 1) >= (idle_anims.len() * DRAWS_PER_IDLE_FRAME) {
                                     entity.idle = None;
                                 } else {
                                     entity.idle = Some(index + 1);
                                 }
                                 return Ok(());
                             }).unwrap();
-                        },
-
-                        EntityType::Player(player) => {
                         },
 
                         _ => continue,
@@ -740,7 +849,7 @@ impl State for Game {
 
         let mut rng = thread_rng();
         for entity in self.entities.iter_mut() {
-            if entity.typ.is_monster() &&
+            if (entity.typ.is_monster() || entity.typ.is_player()) &&
                 entity.idle == None &&
                 rng.gen_range(0.0, 1.0) < IDLE_PROB {
 
@@ -765,36 +874,37 @@ fn update_monsters(game: &mut Game, _window: &mut Window) {
         let prev_position = monster.pos;
 
         let pos_diff = player.pos - monster.pos;
-        let mut pos_move = pos_diff;
-        pos_move.x = pos_move.x.signum();
-        pos_move.y = pos_move.y.signum();
+        let mut pos_move = monster.pos;
+        pos_move.x += pos_diff.x.abs().signum() * pos_diff.x.signum();
+        pos_move.y += pos_diff.y.abs().signum() * pos_diff.y.signum();
         // attempt to constrain rooks to lane movement.
-        // NOTE this traps them when the player is further in a direction that
-        // they cannot make progress in.
         if monster.typ.is_rook() && pos_move.x.abs() == pos_move.y.abs() {
-            if pos_diff.x.abs() > pos_diff.y.abs() {
+            if pos_diff.x.abs() > pos_diff.y.abs() && !blocked_tile(monster.pos + pos_move, &game.map) {
                 pos_move.y = 0.0;
             } else {
                 pos_move.x = 0.0;
             }
         }
 
-        monster.pos += Vector::new(pos_move.x, pos_move.y);
+       // monster.pos += Vector::new(pos_move.x, pos_move.y);
         
-        if blocked_tile(monster.pos, &game.map) {
-            monster.pos = prev_position;
-        } else if let Some(entity) = occupied_tile(monster.pos, &entities) {
+        if blocked_tile(pos_move, &game.map) {
+            pos_move = prev_position;
+        } else if let Some(entity) = occupied_tile(pos_move, &entities) {
             if entity.typ.is_player() {
-                monster.pos = prev_position;
+                pos_move = prev_position;
                 attacks.push((index, entities.iter().enumerate().find(|(_index, ent)| **ent == entity).unwrap().0));
             }  else if entity.typ.is_monster() {
-                monster.pos = prev_position;
+                pos_move = prev_position;
             }
         }
+
+        monster.pos = pos_move;
     }
 
     // resolve attacks that occured
-    for attack in attacks {
+    for attack in attacks.iter() {
+        dbg!(attack);
         let typ = &mut game.entities[attack.1].typ;
         match typ {
             EntityType::Player(_player) => {
@@ -806,6 +916,23 @@ fn update_monsters(game: &mut Game, _window: &mut Window) {
             },
 
             _ => { },
+        }
+    }
+
+    for attack in attacks.iter() {
+        let typ = game.entities[attack.1].typ.clone();
+        // only monsters have attack animations
+        if typ.is_monster() {
+            match typ {
+                EntityType::Monster(monster) => {
+                    let pos = game.entities[attack.0].pos;
+                    let anim = Animation::MonsterAttack(monster.typ.clone(), pos, 0);
+                    dbg!(anim);
+                    game.animations.push(anim);
+                },
+                
+                _ => panic!("Unreachable?!?!?!"),
+            }
         }
     }
 
@@ -902,10 +1029,12 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
                         Trap::Berserk => {
                             match entity.typ {
                                 EntityType::Monster(mut monster) => {
+                                    // TODO try setting entity
                                     monster.status = Some(Status::Berserk);
                                 },
 
                                 EntityType::Player(mut player) => {
+                                    // TODO try setting entity
                                     player.status = Some(Status::Berserk);
                                 },
 
@@ -937,8 +1066,8 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
 
                         Trap::Bump => {
                             let pos = entity.pos;
-                            let x_offset = rng.gen_range(-1, 1);
-                            let y_offset = rng.gen_range(-1, 1);
+                            let x_offset = rng.gen_range(-1, 2);
+                            let y_offset = rng.gen_range(-1, 2);
                             entity.pos =
                                 attempt_move(pos,
                                              Vector::new(x_offset, y_offset),
@@ -952,6 +1081,14 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
                                 count_downs.push((trap_index, n - 1));
                             }
                         },
+
+                        Trap::NextLevel => {
+                            // regenerate map
+                        }
+
+                        Trap::Win => {
+                            // set win flag
+                        }
 
                         Trap::Arrow(dir) => {
                             let x_dir;
@@ -1013,16 +1150,9 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
 }
 
 fn draw_entity(entity: &Entity,
-               offset_px: Vector,
+               pos: Vector,
                window: &mut Window,
                char_map: &mut Asset<HashMap<u32, Image>>) {
-    let tile_size_px = Vector::new(TILE_WIDTH_PX, TILE_HEIGHT_PX);
-    let pos_px = entity.pos.times(tile_size_px);
-    let pos = offset_px + pos_px;
-
-    if !entity.typ.is_trap() {
-        dbg!(entity);
-    }
     let color = 
         match entity.typ {
             EntityType::Monster(monster) => {
@@ -1073,8 +1203,8 @@ fn main() {
         // If the graphics do need to be scaled (e.g. using
         // `with_center`), blur them. This looks better with fonts.
         scale: quicksilver::graphics::ImageScaleStrategy::Blur,
-        draw_rate: 250.0,
-        update_rate: 50.0,
+        draw_rate: 100.0,
+        update_rate: MILLIS_PER_UPDATE,
         ..Default::default()
     };
     run::<Game>("Ludum Dare 45", Vector::new(WINDOW_WIDTH, WINDOW_HEIGHT), settings);
