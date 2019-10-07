@@ -1604,11 +1604,14 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map, animations: &mut Vec<Ani
                             let mut prev_pos = entity.pos;
                             cur_pos += Vector::new(x_dir, y_dir);
                             while !blocked_tile(cur_pos, map) &&
-                                  (occupied_tile(cur_pos, &entities_clone) == None ||
-                                   occupied_tile(cur_pos, &entities_clone).map(|ent| ent.typ.is_trap()).unwrap_or(false)) {
+                                  occupied_tile(cur_pos, &entities_clone) == None {
                                 prev_pos = cur_pos;
                                 cur_pos += Vector::new(x_dir, y_dir);
                             }
+                            if occupied_tile(cur_pos, &entities_clone).map(|ent| ent.typ.is_trap()).unwrap_or(false)) {
+                                prev_pos = cur_pos;
+                            }
+
                             moves.push((prev_pos, index));
                         }
                     }
