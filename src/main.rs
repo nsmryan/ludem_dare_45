@@ -11,7 +11,7 @@ use quicksilver::prelude::*;
 //
 
 
-const NUM_LEVEL_GAME: usize = 3;
+const NUM_LEVEL_GAME: usize = 2;
 
 const BACKGROUND_COLOR: Color = Color::BLACK;
 const SCALE: f32 = 2.5;
@@ -391,7 +391,7 @@ impl Entity {
 
         let anim_state =
             match trap {
-                Trap::Arrow(_) | Trap::NextLevel | Trap::Berserk | Trap::Win | Trap::CountDown(_) => AnimState::None,
+                Trap::Arrow(_) | Trap::NextLevel | Trap::Berserk | Trap::CountDown(_) => AnimState::None,
                 _ => AnimState::Idle(0),
             };
 
@@ -521,6 +521,7 @@ struct Game {
     rook_attack_up: Asset<Vec<Image>>,
     rook_attack_right: Asset<Vec<Image>>,
     rook_attack_left: Asset<Vec<Image>>,
+    trap_win: Asset<Vec<Image>>,
     trap_damage: Asset<Vec<Image>>,
     trap_arrow_up: Asset<Vec<Image>>,
     trap_arrow_down: Asset<Vec<Image>>,
@@ -714,6 +715,19 @@ impl State for Game {
             }
 
             return Ok(gol_death);
+        }));
+
+        let trap_win_name = "McMuffin.png";
+        let trap_win = Asset::new(Image::load(trap_win_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
+            let mut trap_win = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..num_sprites {
+                let pos = Vector::new(image_index * 16, 0);
+                trap_win.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(trap_win);
         }));
 
         let trap_damage_name = "DamageTrap.png";
@@ -927,6 +941,7 @@ impl State for Game {
             rook_attack_left,
             gol_death,
             rook_death,
+            trap_win,
             trap_damage,
             trap_arrow_up,
             trap_arrow_down,
@@ -1142,6 +1157,7 @@ impl State for Game {
                                             Trap::Kill => idle_anims = &mut self.trap_damage,
                                             Trap::Bump => idle_anims = &mut self.trap_random_direction,
                                             Trap::Teleport => idle_anims = &mut self.trap_tele,
+                                            Trap::Win => idle_anims = &mut self.trap_win,
                                             Trap::Arrow(arrow) => {
                                                 match arrow {
                                                     Arrow::Up => idle_anims = &mut self.trap_arrow_up,
