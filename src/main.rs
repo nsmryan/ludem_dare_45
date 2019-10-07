@@ -540,7 +540,7 @@ impl State for Game {
         let font_mononoki = "mononoki-Regular.ttf";
 
         let title = Asset::new(Font::load(font_mononoki).and_then(|font| {
-            font.render("StoneFall", &FontStyle::new(72.0, WHITE))
+            font.render("Stone Fall", &FontStyle::new(72.0, WHITE))
         }));
 
         let font_image = "LD45_SpriteSheet.png";
