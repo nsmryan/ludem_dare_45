@@ -803,6 +803,9 @@ impl State for Game {
             }
         }
 
+        // draw animations
+        dbg!(self.animations);
+
         let player = &self.entities[self.player_id];
         let full_health_width_px = 100.0;
         let current_health_width_px =
