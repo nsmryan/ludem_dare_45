@@ -6,12 +6,7 @@ use noise::*;
 use quicksilver::prelude::*;
 
 
-// TODO
-//      winning condition
-//
-
-
-const NUM_LEVEL_GAME: usize = 2;
+const NUM_LEVEL_GAME: usize = 4;
 
 const BACKGROUND_COLOR: Color = Color::BLACK;
 const SCALE: f32 = 2.5;
@@ -1608,7 +1603,9 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map, animations: &mut Vec<Ani
                             let mut cur_pos = entity.pos;
                             let mut prev_pos = entity.pos;
                             cur_pos += Vector::new(x_dir, y_dir);
-                            while !blocked_tile(cur_pos, map) && occupied_tile(cur_pos, &entities_clone) == None {
+                            while !blocked_tile(cur_pos, map) &&
+                                  (occupied_tile(cur_pos, &entities_clone) == None ||
+                                   occupied_tile(cur_pos, &entities_clone).map(|ent| ent.typ.is_trap()).unwrap_or(false)) {
                                 prev_pos = cur_pos;
                                 cur_pos += Vector::new(x_dir, y_dir);
                             }
