@@ -6,14 +6,8 @@ use noise::*;
 use quicksilver::prelude::*;
 
 
-// TODO 
-//      attack animation
-//
+// TODO
 //      winning condition
-//
-//      player idle
-//
-//      add wall meld
 //
 
 
@@ -23,6 +17,8 @@ const SCALE: f32 = 2.5;
 const WALL_CHAR: char = 2 as char;
 const ITERP_TIME: f64 = 0.15;
 const DRAWS_PER_IDLE_FRAME: usize = 2;
+const DRAWS_PER_ATTACK_FRAME: usize = 1;
+const DRAWS_PER_DEATH_FRAME: usize = 2;
 
 const WINDOW_WIDTH: u32 = 800;
 const WINDOW_HEIGHT: u32 = 600;
@@ -243,6 +239,7 @@ type Map = Vec<Tile>;
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Animation {
     MonsterAttack(MonsterType, Vector, usize),
+    MonsterDeath(MonsterType, Vector, usize),
 }
 
 fn generate_map(size: Vector) -> Vec<Tile> {
@@ -336,13 +333,30 @@ fn clamp(min: f32, max: f32, value: f32) -> f32 {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+enum AnimState {
+    None,
+    Idle(usize),
+    Attacking(usize, Arrow),
+}
+
+impl AnimState {
+    fn is_none(&self) -> bool {
+        match self {
+            AnimState::None => true,
+            AnimState::Idle(_) => false,
+            AnimState::Attacking(_, _) => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 struct Entity {
     last_pos: Vector,
     pos: Vector,
     glyph: char,
     color: Color,
     typ: EntityType,
-    idle: Option<usize>,
+    anim_state: AnimState,
 }
 
 impl Entity {
@@ -354,22 +368,28 @@ impl Entity {
         };
 
         let chr = match trap {
-            Trap::Kill => 137 as char,
+            Trap::Kill => 147 as char,
             Trap::Berserk => '*',
-            Trap::Bump => '+',
+            Trap::Bump => 42 as char,
             Trap::Teleport => '!',
             Trap::CountDown(n) => ('0' as u8 + n) as char,
             Trap::Arrow(dir) => {
                 match dir {
                     Arrow::Left => 17 as char,
                     Arrow::Right => 16 as char,
-                    Arrow::Up => 30 as char,
-                    Arrow::Down => 31 as char,
+                    Arrow::Up => 18 as char,
+                    Arrow::Down => 19 as char,
                 }
             }
-            Trap::NextLevel => 127 as char,
+            Trap::NextLevel => 3 as char,
             Trap::Win => 255 as char,
         };
+
+        let anim_state =
+            match trap {
+                Trap::Arrow(_) | Trap::NextLevel | Trap::Berserk | Trap::Win | Trap::CountDown(_) => AnimState::None,
+                _ => AnimState::Idle(0),
+            };
 
         Entity {
             last_pos: pos,
@@ -377,7 +397,7 @@ impl Entity {
             glyph: chr,
             color: color,
             typ: EntityType::trap(trap),
-            idle: None,
+            anim_state: anim_state,
         }
     }
 
@@ -388,7 +408,7 @@ impl Entity {
             glyph: 152 as char,
             color: MONSTER_COLOR,
             typ: EntityType::monster(1, MonsterType::Gol),
-            idle: None,
+            anim_state: AnimState::Idle(0),
         }
     }
 
@@ -399,7 +419,7 @@ impl Entity {
             glyph: 130 as char,
             color: MONSTER_COLOR,
             typ: EntityType::monster(2, MonsterType::Rook),
-            idle: None,
+            anim_state: AnimState::Idle(0),
         }
     }
 }
@@ -452,6 +472,8 @@ fn generate_entities(entities: &mut Vec<Entity>, map: &Map) -> Vector {
         entities.push(Entity::trap(positions.next().unwrap(), Trap::Bump));
         entities.push(Entity::trap(positions.next().unwrap(), Trap::Kill));
         entities.push(Entity::trap(positions.next().unwrap(), Trap::Kill));
+        entities.push(Entity::trap(positions.next().unwrap(), Trap::Kill));
+        entities.push(Entity::trap(positions.next().unwrap(), Trap::Kill));
         entities.push(Entity::trap(positions.next().unwrap(), Trap::Arrow(Arrow::Left)));
         entities.push(Entity::trap(positions.next().unwrap(), Trap::Arrow(Arrow::Right)));
         entities.push(Entity::trap(positions.next().unwrap(), Trap::Arrow(Arrow::Up)));
@@ -481,10 +503,23 @@ struct Game {
     gol_idle: Asset<Vec<Image>>,
     rook_idle: Asset<Vec<Image>>,
     player_idle: Asset<Vec<Image>>,
-    gol_attack: Asset<Vec<Image>>,
+    gol_attack_up: Asset<Vec<Image>>,
+    gol_attack_down: Asset<Vec<Image>>,
+    gol_attack_left: Asset<Vec<Image>>,
+    gol_attack_right: Asset<Vec<Image>>,
     rook_attack_down: Asset<Vec<Image>>,
     rook_attack_up: Asset<Vec<Image>>,
     rook_attack_right: Asset<Vec<Image>>,
+    rook_attack_left: Asset<Vec<Image>>,
+    trap_damage: Asset<Vec<Image>>,
+    trap_arrow_up: Asset<Vec<Image>>,
+    trap_arrow_down: Asset<Vec<Image>>,
+    trap_arrow_right: Asset<Vec<Image>>,
+    trap_arrow_left: Asset<Vec<Image>>,
+    trap_random_direction: Asset<Vec<Image>>,
+    trap_tele: Asset<Vec<Image>>,
+    gol_death: Asset<Vec<Image>>,
+    rook_death: Asset<Vec<Image>>,
     time_passed: f64,
     animations: Vec<Animation>,
 }
@@ -517,10 +552,10 @@ impl State for Game {
 
         let gol_idle_name = "Gol_Idle.png";
         let gol_idle = Asset::new(Image::load(gol_idle_name).and_then(|image| {
-            let gol_idle_anims: u32 = 9;
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
             let mut gol_idle = Vec::new();
             let anim_size = Vector::new(16, 16);
-            for image_index in 0..gol_idle_anims {
+            for image_index in 0..num_sprites {
                 let pos = Vector::new(image_index * 16, 0);
                 gol_idle.push(image.subimage(Rectangle::new(pos, anim_size)));
             }
@@ -530,9 +565,10 @@ impl State for Game {
 
         let rook_idle_name = "Rook_Idle.png";
         let rook_idle = Asset::new(Image::load(rook_idle_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
             let mut rook_idle = Vec::new();
             let anim_size = Vector::new(16, 16);
-            for image_index in 0..12 {
+            for image_index in 0..num_sprites {
                 let pos = Vector::new(image_index * 16, 0);
                 rook_idle.push(image.subimage(Rectangle::new(pos, anim_size)));
             }
@@ -540,12 +576,51 @@ impl State for Game {
             return Ok(rook_idle);
         }));
 
-        let gol_attack_name = "Gol_Attack.png";
-        let gol_attack = Asset::new(Image::load(gol_attack_name).and_then(|image| {
-            let gol_attack_anims: u32 = 9;
+        let gol_attack_name = "Gol_AttackUp.png";
+        let gol_attack_up = Asset::new(Image::load(gol_attack_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
             let mut gol_attack = Vec::new();
             let anim_size = Vector::new(16, 16);
-            for image_index in 0..gol_attack_anims {
+            for image_index in 0..num_sprites {
+                let pos = Vector::new(image_index * 16, 0);
+                gol_attack.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(gol_attack);
+        }));
+
+        let gol_attack_name = "Gol_AttackDown.png";
+        let gol_attack_down = Asset::new(Image::load(gol_attack_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
+            let mut gol_attack = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..num_sprites {
+                let pos = Vector::new(image_index * 16, 0);
+                gol_attack.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(gol_attack);
+        }));
+
+        let gol_attack_name = "Gol_AttackRight.png";
+        let gol_attack_right = Asset::new(Image::load(gol_attack_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
+            let mut gol_attack = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..num_sprites {
+                let pos = Vector::new(image_index * 16, 0);
+                gol_attack.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(gol_attack);
+        }));
+
+        let gol_attack_name = "Gol_AttackLeft.png";
+        let gol_attack_left = Asset::new(Image::load(gol_attack_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
+            let mut gol_attack = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..num_sprites {
                 let pos = Vector::new(image_index * 16, 0);
                 gol_attack.push(image.subimage(Rectangle::new(pos, anim_size)));
             }
@@ -555,9 +630,10 @@ impl State for Game {
 
         let rook_attack_name = "Rook_AttackUp.png";
         let rook_attack_up = Asset::new(Image::load(rook_attack_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
             let mut rook_attack = Vec::new();
             let anim_size = Vector::new(16, 16);
-            for image_index in 0..12 {
+            for image_index in 0..num_sprites {
                 let pos = Vector::new(image_index * 16, 0);
                 rook_attack.push(image.subimage(Rectangle::new(pos, anim_size)));
             }
@@ -567,9 +643,10 @@ impl State for Game {
 
         let rook_attack_name = "Rook_AttackDown.png";
         let rook_attack_down = Asset::new(Image::load(rook_attack_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
             let mut rook_attack = Vec::new();
             let anim_size = Vector::new(16, 16);
-            for image_index in 0..12 {
+            for image_index in 0..num_sprites {
                 let pos = Vector::new(image_index * 16, 0);
                 rook_attack.push(image.subimage(Rectangle::new(pos, anim_size)));
             }
@@ -579,9 +656,23 @@ impl State for Game {
 
         let rook_attack_name = "Rook_AttackRight.png";
         let rook_attack_right = Asset::new(Image::load(rook_attack_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
             let mut rook_attack = Vec::new();
             let anim_size = Vector::new(16, 16);
-            for image_index in 0..12 {
+            for image_index in 0..num_sprites {
+                let pos = Vector::new(image_index * 16, 0);
+                rook_attack.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(rook_attack);
+        }));
+
+        let rook_attack_name = "Rook_AttackLeft.png";
+        let rook_attack_left = Asset::new(Image::load(rook_attack_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
+            let mut rook_attack = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..num_sprites {
                 let pos = Vector::new(image_index * 16, 0);
                 rook_attack.push(image.subimage(Rectangle::new(pos, anim_size)));
             }
@@ -591,14 +682,132 @@ impl State for Game {
 
         let player_idle_name = "Player_Idle.png";
         let player_idle = Asset::new(Image::load(player_idle_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
             let mut player_idle = Vec::new();
             let anim_size = Vector::new(16, 16);
-            for image_index in 0..8 {
+            for image_index in 0..num_sprites {
                 let pos = Vector::new(image_index * 16, 0);
                 player_idle.push(image.subimage(Rectangle::new(pos, anim_size)));
             }
 
             return Ok(player_idle);
+        }));
+
+        let gol_death_name = "Gol_Die.png";
+        let gol_death = Asset::new(Image::load(gol_death_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
+            let mut gol_death = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..num_sprites {
+                let pos = Vector::new(image_index * 16, 0);
+                gol_death.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(gol_death);
+        }));
+
+        let trap_damage_name = "DamageTrap.png";
+        let trap_damage = Asset::new(Image::load(trap_damage_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
+            let mut trap_damage = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..num_sprites {
+                let pos = Vector::new(image_index * 16, 0);
+                trap_damage.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(trap_damage);
+        }));
+
+        let trap_arrow_up_name = "DirectionPushTrapUp.png";
+        let trap_arrow_up = Asset::new(Image::load(trap_arrow_up_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
+            let mut trap_arrow_up = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..num_sprites {
+                let pos = Vector::new(image_index * 16, 0);
+                trap_arrow_up.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(trap_arrow_up);
+        }));
+
+        let trap_arrow_down_name = "DirectionPushTrapDown.png";
+        let trap_arrow_down = Asset::new(Image::load(trap_arrow_down_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
+            let mut trap_arrow_down = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..num_sprites {
+                let pos = Vector::new(image_index * 16, 0);
+                trap_arrow_down.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(trap_arrow_down);
+        }));
+
+        let trap_arrow_right_name = "DirectionPushTrapRight.png";
+        let trap_arrow_right = Asset::new(Image::load(trap_arrow_right_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
+            let mut trap_arrow_right = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..num_sprites {
+                let pos = Vector::new(image_index * 16, 0);
+                trap_arrow_right.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(trap_arrow_right);
+        }));
+
+        let trap_arrow_left_name = "DirectionPushTrapLeft.png";
+        let trap_arrow_left = Asset::new(Image::load(trap_arrow_left_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
+            let mut trap_arrow_left = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..num_sprites {
+                let pos = Vector::new(image_index * 16, 0);
+                trap_arrow_left.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(trap_arrow_left);
+        }));
+
+        let trap_random_direction_name = "RandomDirectionTrap.png";
+        let trap_random_direction = Asset::new(Image::load(trap_random_direction_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
+            let mut trap_random_direction = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..num_sprites {
+                let pos = Vector::new(image_index * 16, 0);
+                trap_random_direction.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(trap_random_direction);
+        }));
+
+        let trap_tele_name = "TeleTrap.png";
+        let trap_tele = Asset::new(Image::load(trap_tele_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
+            let mut trap_tele = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..num_sprites {
+                let pos = Vector::new(image_index * 16, 0);
+                trap_tele.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(trap_tele);
+        }));
+
+        let rook_death_name = "Rook_Die.png";
+        let rook_death = Asset::new(Image::load(rook_death_name).and_then(|image| {
+            let num_sprites: u32 = image.area().size().x as u32 / 16;
+            let mut rook_death = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..num_sprites {
+                let pos = Vector::new(image_index * 16, 0);
+                rook_death.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(rook_death);
         }));
 
         let lost_game_message = Asset::new(Font::load(font_mononoki).and_then(|font| {
@@ -643,7 +852,7 @@ impl State for Game {
                 max_hp: 5,
                 status: None,
             }),
-            idle: Some(0),
+            anim_state: AnimState::Idle(0),
         });
         map[player_start.y as usize + player_start.x as usize * MAP_HEIGHT] =
             Tile::wall(player_start.x as usize, player_start.y as usize);
@@ -693,10 +902,23 @@ impl State for Game {
             player_idle,
             time_passed: 0.0,
             animations: Vec::new(),
-            gol_attack,
+            gol_attack_right,
+            gol_attack_up,
+            gol_attack_down,
+            gol_attack_left,
             rook_attack_up,
             rook_attack_down,
             rook_attack_right,
+            rook_attack_left,
+            gol_death,
+            rook_death,
+            trap_damage,
+            trap_arrow_up,
+            trap_arrow_down,
+            trap_arrow_right,
+            trap_arrow_left,
+            trap_random_direction,
+            trap_tele,
         })
     }
 
@@ -712,7 +934,7 @@ impl State for Game {
                 if took_turn {
                     self.time_passed = 0.0;
                     update_monsters(self, window);
-                    resolve_traps(&mut self.entities, &self.map);
+                    resolve_traps(&mut self.entities, &self.map, &mut self.animations);
                 }
 
                 if window.keyboard()[Key::Escape].is_down() {
@@ -787,7 +1009,7 @@ impl State for Game {
         // draw entities
         // draw traps
         for entity in self.entities.iter() {
-            if entity.typ.is_trap() {
+            if entity.typ.is_trap() && entity.anim_state.is_none() {
                 let tile_size_px = Vector::new(TILE_WIDTH_PX, TILE_HEIGHT_PX);
                 let pos_px = entity.pos.times(tile_size_px);
                 let pos = offset_px + pos_px;
@@ -809,22 +1031,84 @@ impl State for Game {
             let pos_px = ent_pos.times(tile_size_px);
             let pos = offset_px + pos_px;
 
-            match entity.idle {
-                None => {
+            match entity.anim_state {
+                AnimState::None => {
                     draw_entity(entity, pos, window, &mut self.char_map);
                 }
 
-                Some(index) => {
+                AnimState::Attacking(index, direction) => {
                     match entity.typ {
-                        EntityType::Monster(_) | EntityType::Player(_) => {
+                        EntityType::Monster(_) => {
+                            let anims;
+                            if entity.typ.is_rook() {
+                                anims = &mut self.rook_attack_right;
+                            } else {
+                                match direction {
+                                    Arrow::Up => anims = &mut self.gol_attack_up,
+                                    Arrow::Down => anims = &mut self.gol_attack_down,
+                                    Arrow::Right => anims = &mut self.gol_attack_right,
+                                    Arrow::Left => anims = &mut self.gol_attack_left,
+                                }
+                            }
+                            anims.execute(|anims| {
+                                let rect = Rectangle::new(pos,
+                                                          Vector::new(16, 16));
+                                let anim_index = index / DRAWS_PER_ATTACK_FRAME;
+                                window.draw_ex(&rect,
+                                               Blended(&anims[anim_index], entity.color),
+                                               Transform::scale(Vector::new(SCALE, SCALE)),
+                                               SCALE);
+                                if (index + 1) >= (anims.len() * DRAWS_PER_ATTACK_FRAME) {
+                                    entity.anim_state = AnimState::Idle(0);
+                                } else {
+                                    entity.anim_state = AnimState::Attacking(index + 1, direction);
+                                }
+                                return Ok(());
+                            }).unwrap();
+                        },
+
+                        _ => continue,
+                    }
+                }
+
+                AnimState::Idle(index) => {
+                    match entity.typ {
+                        EntityType::Monster(_) | EntityType::Player(_) | EntityType::Trap(_) => {
                             let idle_anims;
                             if entity.typ.is_player() {
                                 idle_anims = &mut self.player_idle;
-                            } else if entity.typ.is_rook() {
+                            } else if entity.typ.is_monster() {
+                                if entity.typ.is_rook() {
                                 idle_anims = &mut self.rook_idle;
+                                } else {
+                                    idle_anims = &mut self.gol_idle;
+                                }
+                            } else if entity.typ.is_trap() {
+                                match entity.typ {
+                                    EntityType::Trap(trap) => {
+                                        match trap {
+                                            Trap::Kill => idle_anims = &mut self.trap_damage,
+                                            Trap::Bump => idle_anims = &mut self.trap_random_direction,
+                                            Trap::Teleport => idle_anims = &mut self.trap_tele,
+                                            Trap::Arrow(arrow) => {
+                                                match arrow {
+                                                    Arrow::Up => idle_anims = &mut self.trap_arrow_up,
+                                                    Arrow::Down => idle_anims = &mut self.trap_arrow_down,
+                                                    Arrow::Right => idle_anims = &mut self.trap_arrow_right,
+                                                    Arrow::Left => idle_anims = &mut self.trap_arrow_left,
+                                                }
+                                            },
+                                            
+                                            _ => panic!("Should not be here..."),
+                                        }
+                                    },
+
+                                    _ => panic!("Unreachable type!"),
+                                }
                             } else {
-                                idle_anims = &mut self.gol_idle;
+                                panic!("Unreachable arm for animation!");
                             }
+
                             idle_anims.execute(|idle_anims| {
                                 let rect = Rectangle::new(pos,
                                                           Vector::new(16, 16));
@@ -834,9 +1118,9 @@ impl State for Game {
                                                Transform::scale(Vector::new(SCALE, SCALE)),
                                                SCALE);
                                 if (index + 1) >= (idle_anims.len() * DRAWS_PER_IDLE_FRAME) {
-                                    entity.idle = None;
+                                    entity.anim_state = AnimState::Idle(0);
                                 } else {
-                                    entity.idle = Some(index + 1);
+                                    entity.anim_state = AnimState::Idle(index + 1);
                                 }
                                 return Ok(());
                             }).unwrap();
@@ -849,8 +1133,45 @@ impl State for Game {
         }
 
         // draw animations
-        for animation in self.animations.iter_mut() {
+        let mut animations_done = Vec::new();
+        for (animation_index, animation) in self.animations.iter_mut().enumerate() {
             match animation {
+                Animation::MonsterDeath(monster_typ, loc, sprite_index) => {
+                    let anims;
+                    match monster_typ {
+                        MonsterType::Gol => {
+                            anims = &mut self.gol_death;
+                        },
+
+                        MonsterType::Rook => {
+                            anims = &mut self.rook_death;
+                        },
+                    }
+
+                    let tile_size_px = Vector::new(TILE_WIDTH_PX, TILE_HEIGHT_PX);
+                    let pos_px = loc.times(tile_size_px);
+                    let pos = offset_px + pos_px;
+
+                    let mut anim_len = 0;
+                    anims.execute(|anims| {
+                        let rect = Rectangle::new(pos,
+                                                  Vector::new(16, 16));
+                        let anim_index = *sprite_index / DRAWS_PER_DEATH_FRAME;
+                        window.draw_ex(&rect,
+                                       Blended(&anims[anim_index], MONSTER_COLOR),
+                                       Transform::scale(Vector::new(SCALE, SCALE)),
+                                       SCALE);
+                        anim_len = anims.len();
+                        return Ok(());
+                    }).unwrap();
+
+                    if (*sprite_index + 1) >= (anim_len * DRAWS_PER_DEATH_FRAME) {
+                        animations_done.push(animation_index);
+                    } else {
+                        *animation = Animation::MonsterDeath(monster_typ.clone(), *loc, *sprite_index + 1);
+                    }
+                }
+
                 Animation::MonsterAttack(monster_typ, loc, sprite_index) => {
                     let tile = self.map.iter().find(|other_tile| other_tile.pos == *loc).unwrap(); //[loc.y as usize + loc.x as usize * MAP_HEIGHT];
                     draw_tile(tile, window, offset_px, &mut self.char_map, &mut self.noise);
@@ -867,6 +1188,8 @@ impl State for Game {
                 }
             }
         }
+
+        // TODO remove used animation
 
         let player = &self.entities[self.player_id];
         let full_health_width_px = 100.0;
@@ -912,17 +1235,29 @@ impl State for Game {
             })?;
         }
 
-        let mut rng = thread_rng();
-        for entity in self.entities.iter_mut() {
-            if (entity.typ.is_monster() || entity.typ.is_player()) &&
-                entity.idle == None &&
-                rng.gen_range(0.0, 1.0) < IDLE_PROB {
+        //let mut rng = thread_rng();
+        //for entity in self.entities.iter_mut() {
+        //    if (entity.typ.is_monster() || entity.typ.is_player()) &&
+        //        entity.idle == None &&
+        //        rng.gen_range(0.0, 1.0) < IDLE_PROB {
 
-                entity.idle = Some(0);
-            }
-        }
+        //        entity.idle = AnimState::Idle(0);
+        //    }
+        //}
 
         Ok(())
+    }
+}
+
+fn direction(dir: Vector) -> Arrow {
+    if dir.x > 0.0 && dir.y == 0.0 {
+        Arrow::Right
+    } else if dir.x == 0.0 && dir.y < 0.0 {
+        Arrow::Up
+    } else if dir.x < 0.0 {
+        Arrow::Left
+    } else { // if dir.y < 0 {
+        Arrow::Down
     }
 }
 
@@ -955,10 +1290,12 @@ fn update_monsters(game: &mut Game, _window: &mut Window) {
             pos_move = prev_position;
         } else if let Some(entity) = occupied_tile(pos_move, &entities) {
             if entity.typ.is_player() {
+                let dir = direction(pos_move - prev_position);
                 pos_move = prev_position;
                 //attacks.push((index, entities.iter().enumerate().find(|(_index, ent)| **ent == entity).unwrap().0));
                 attacks.push((index, game.player_id));
-                dbg!(index);
+                // TODO choose arrow based on attack direction...
+                monster.anim_state = AnimState::Attacking(0, dir);
             }  else if entity.typ.is_monster() {
                 // TODO add for monsters too...
                 pos_move = prev_position;
@@ -970,7 +1307,6 @@ fn update_monsters(game: &mut Game, _window: &mut Window) {
 
     // resolve attacks that occured
     for attack in attacks.iter() {
-        dbg!(attack);
         let typ = &mut game.entities[attack.1].typ;
         match typ {
             EntityType::Player(_player) => {
@@ -989,21 +1325,22 @@ fn update_monsters(game: &mut Game, _window: &mut Window) {
             EntityType::Monster(monster) => {
                 let pos = game.entities[attack.0].pos;
                 let anim = Animation::MonsterAttack(monster.typ.clone(), pos, 0);
-                dbg!(anim);
-                game.animations.push(anim);
+                // TODO removes this kind of animation for attacks...
+                //game.animations.push(anim);
             },
             
             _ => (),
         }
     }
 
-    let mut remove_indices: Vec<usize> =
+    let remove_indices: Vec<usize> =
         game.entities.iter()
                      .enumerate()
                      .filter(|(_ix, ent)| ent.typ.is_monster() && ent.hp() <= 0)
                      .map(|(ix, _ent)| ix)
                      .collect();
     for ix in remove_indices {
+        dbg!();
         game.entities.swap_remove(ix);
     }
 
@@ -1070,7 +1407,7 @@ fn update_player(game: &mut Game, window: &mut Window) -> bool {
     return took_turn;
 }
 
-fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
+fn resolve_traps(entities: &mut Vec<Entity>, map: &Map, animations: &mut Vec<Animation>) {
     let mut rng = thread_rng();
     let entities_clone = entities.clone();
     let mut removals: Vec<usize> = Vec::new();
@@ -1106,6 +1443,15 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
                         Trap::Kill => {
                             entity.typ.lose_hp(5);
                             removals.push(trap_index);
+                            match entity.typ {
+                                EntityType::Monster(monster) => {
+                                    animations.push(Animation::MonsterDeath(monster.typ,
+                                                                            entity.pos,
+                                                                            0));
+                                }
+
+                                _ => (),
+                            }
                         },
 
                         Trap::Teleport => {
@@ -1206,6 +1552,16 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
     removals.sort();
     removals.reverse();
     for index in removals.iter() {
+        match entities[*index].typ {
+            EntityType::Monster(monster) => {
+                dbg!();
+                animations.push(Animation::MonsterDeath(monster.typ,
+                                                        entities[*index].pos,
+                                                        0));
+            }
+
+            _ => (),
+        }
         entities.swap_remove(*index);
     }
 }
