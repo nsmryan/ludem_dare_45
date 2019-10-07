@@ -990,6 +990,7 @@ impl State for Game {
                     let mut next_level = false;
 
                     update_monsters(self, window);
+
                     resolve_traps(&mut self.entities, &self.map, &mut self.animations, &mut next_level, &mut win);
 
                     if next_level {
@@ -1608,7 +1609,7 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map, animations: &mut Vec<Ani
                                 prev_pos = cur_pos;
                                 cur_pos += Vector::new(x_dir, y_dir);
                             }
-                            if occupied_tile(cur_pos, &entities_clone).map(|ent| ent.typ.is_trap()).unwrap_or(false)) {
+                            if occupied_tile(cur_pos, &entities_clone).map(|ent| ent.typ.is_trap()).unwrap_or(false) {
                                 prev_pos = cur_pos;
                             }
 
