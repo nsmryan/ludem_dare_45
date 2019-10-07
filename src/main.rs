@@ -481,6 +481,10 @@ struct Game {
     gol_idle: Asset<Vec<Image>>,
     rook_idle: Asset<Vec<Image>>,
     player_idle: Asset<Vec<Image>>,
+    gol_attack: Asset<Vec<Image>>,
+    rook_attack_down: Asset<Vec<Image>>,
+    rook_attack_up: Asset<Vec<Image>>,
+    rook_attack_right: Asset<Vec<Image>>,
     time_passed: f64,
     animations: Vec<Animation>,
 }
@@ -493,7 +497,7 @@ impl State for Game {
         let font_mononoki = "mononoki-Regular.ttf";
 
         let title = Asset::new(Font::load(font_mononoki).and_then(|font| {
-            font.render("Ludum Dare 45", &FontStyle::new(72.0, WHITE))
+            font.render("StoneFall", &FontStyle::new(72.0, WHITE))
         }));
 
         let font_image = "LD45_SpriteSheet.png";
@@ -534,6 +538,55 @@ impl State for Game {
             }
 
             return Ok(rook_idle);
+        }));
+
+        let gol_attack_name = "Gol_Attack.png";
+        let gol_attack = Asset::new(Image::load(gol_attack_name).and_then(|image| {
+            let gol_attack_anims: u32 = 9;
+            let mut gol_attack = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..gol_attack_anims {
+                let pos = Vector::new(image_index * 16, 0);
+                gol_attack.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(gol_attack);
+        }));
+
+        let rook_attack_name = "Rook_AttackUp.png";
+        let rook_attack_up = Asset::new(Image::load(rook_attack_name).and_then(|image| {
+            let mut rook_attack = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..12 {
+                let pos = Vector::new(image_index * 16, 0);
+                rook_attack.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(rook_attack);
+        }));
+
+        let rook_attack_name = "Rook_AttackDown.png";
+        let rook_attack_down = Asset::new(Image::load(rook_attack_name).and_then(|image| {
+            let mut rook_attack = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..12 {
+                let pos = Vector::new(image_index * 16, 0);
+                rook_attack.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(rook_attack);
+        }));
+
+        let rook_attack_name = "Rook_AttackRight.png";
+        let rook_attack_right = Asset::new(Image::load(rook_attack_name).and_then(|image| {
+            let mut rook_attack = Vec::new();
+            let anim_size = Vector::new(16, 16);
+            for image_index in 0..12 {
+                let pos = Vector::new(image_index * 16, 0);
+                rook_attack.push(image.subimage(Rectangle::new(pos, anim_size)));
+            }
+
+            return Ok(rook_attack);
         }));
 
         let player_idle_name = "Player_Idle.png";
@@ -640,6 +693,10 @@ impl State for Game {
             player_idle,
             time_passed: 0.0,
             animations: Vec::new(),
+            gol_attack,
+            rook_attack_up,
+            rook_attack_down,
+            rook_attack_right,
         })
     }
 
@@ -724,19 +781,7 @@ impl State for Game {
 
         // draw map
         for tile in self.map.iter() {
-            let pos_px = tile.pos.times(tile_size_px);
-            let pos = offset_px + pos_px;
-            let color_noise =
-                self.noise.get([6.0 * (pos.x as f64 / WINDOW_WIDTH as f64),
-                                6.0 * (pos.y as f64 / WINDOW_HEIGHT as f64)]);
-            let mut tile_color = lerp_color(DARK_GRAY, LIGHT_GRAY, color_noise as f32);
-            if tile.blocks {
-                tile_color = LIGHT_GRAY;
-            }
-            self.char_map.execute(|char_map| {
-                draw_char(&char_map, window, pos, tile.glyph, tile_color);
-                return Ok(());
-            });
+            draw_tile(tile, window, offset_px, &mut self.char_map, &mut self.noise);
         }
 
         // draw entities
@@ -804,7 +849,24 @@ impl State for Game {
         }
 
         // draw animations
-        dbg!(self.animations);
+        for animation in self.animations.iter_mut() {
+            match animation {
+                Animation::MonsterAttack(monster_typ, loc, sprite_index) => {
+                    let tile = self.map.iter().find(|other_tile| other_tile.pos == *loc).unwrap(); //[loc.y as usize + loc.x as usize * MAP_HEIGHT];
+                    draw_tile(tile, window, offset_px, &mut self.char_map, &mut self.noise);
+                    //let sprites;
+                    match monster_typ {
+                        MonsterType::Gol => {
+                            //sprites = game.gol_attack;
+                        }
+
+                        MonsterType::Rook => {
+                            //sprites = game.rook_attack;
+                        }
+                    }
+                }
+            }
+        }
 
         let player = &self.entities[self.player_id];
         let full_health_width_px = 100.0;
@@ -873,7 +935,7 @@ fn update_monsters(game: &mut Game, _window: &mut Window) {
     let mut attacks: Vec<(EntityId, EntityId)> = Vec::new();
 
     // For each monster
-    for (index, monster) in game.entities.iter_mut().filter(|entity| entity.typ.is_monster()).enumerate() {
+    for (index, monster) in game.entities.iter_mut().enumerate().filter(|(_index, entity)| entity.typ.is_monster()) {
         let prev_position = monster.pos;
 
         let pos_diff = player.pos - monster.pos;
@@ -882,22 +944,23 @@ fn update_monsters(game: &mut Game, _window: &mut Window) {
         pos_move.y += pos_diff.y.abs().signum() * pos_diff.y.signum();
         // attempt to constrain rooks to lane movement.
         if monster.typ.is_rook() && pos_move.x.abs() == pos_move.y.abs() {
-            if pos_diff.x.abs() > pos_diff.y.abs() && !blocked_tile(monster.pos + pos_move, &game.map) {
+            if pos_diff.x.abs() > pos_diff.y.abs() && !blocked_tile(pos_move, &game.map) {
                 pos_move.y = 0.0;
             } else {
                 pos_move.x = 0.0;
             }
         }
 
-       // monster.pos += Vector::new(pos_move.x, pos_move.y);
-        
         if blocked_tile(pos_move, &game.map) {
             pos_move = prev_position;
         } else if let Some(entity) = occupied_tile(pos_move, &entities) {
             if entity.typ.is_player() {
                 pos_move = prev_position;
-                attacks.push((index, entities.iter().enumerate().find(|(_index, ent)| **ent == entity).unwrap().0));
+                //attacks.push((index, entities.iter().enumerate().find(|(_index, ent)| **ent == entity).unwrap().0));
+                attacks.push((index, game.player_id));
+                dbg!(index);
             }  else if entity.typ.is_monster() {
+                // TODO add for monsters too...
                 pos_move = prev_position;
             }
         }
@@ -920,22 +983,17 @@ fn update_monsters(game: &mut Game, _window: &mut Window) {
 
             _ => { },
         }
-    }
 
-    for attack in attacks.iter() {
-        let typ = game.entities[attack.1].typ.clone();
         // only monsters have attack animations
-        if typ.is_monster() {
-            match typ {
-                EntityType::Monster(monster) => {
-                    let pos = game.entities[attack.0].pos;
-                    let anim = Animation::MonsterAttack(monster.typ.clone(), pos, 0);
-                    dbg!(anim);
-                    game.animations.push(anim);
-                },
-                
-                _ => panic!("Unreachable?!?!?!"),
-            }
+        match game.entities[attack.0].typ {
+            EntityType::Monster(monster) => {
+                let pos = game.entities[attack.0].pos;
+                let anim = Animation::MonsterAttack(monster.typ.clone(), pos, 0);
+                dbg!(anim);
+                game.animations.push(anim);
+            },
+            
+            _ => (),
         }
     }
 
@@ -1152,6 +1210,24 @@ fn resolve_traps(entities: &mut Vec<Entity>, map: &Map) {
     }
 }
 
+fn draw_tile(tile: &Tile, window: &mut Window, offset_px: Vector, char_map: &mut Asset<HashMap<u32, Image>>, noise: &mut Perlin) {
+    let tile_size_px = Vector::new(TILE_WIDTH_PX, TILE_HEIGHT_PX);
+    let pos_px = tile.pos.times(tile_size_px);
+    let pos = offset_px + pos_px;
+    let color_noise =
+        noise.get([6.0 * (pos.x as f64 / WINDOW_WIDTH as f64),
+                   6.0 * (pos.y as f64 / WINDOW_HEIGHT as f64)]);
+    let mut tile_color = lerp_color(DARK_GRAY, LIGHT_GRAY, color_noise as f32);
+    if tile.blocks {
+        tile_color = LIGHT_GRAY;
+    }
+
+    char_map.execute(|char_map| {
+        draw_char(&char_map, window, pos, tile.glyph, tile_color);
+        Ok(())
+    });
+}
+
 fn draw_entity(entity: &Entity,
                pos: Vector,
                window: &mut Window,
@@ -1210,5 +1286,5 @@ fn main() {
         update_rate: MILLIS_PER_UPDATE,
         ..Default::default()
     };
-    run::<Game>("Ludum Dare 45", Vector::new(WINDOW_WIDTH, WINDOW_HEIGHT), settings);
+    run::<Game>("Stone Fall", Vector::new(WINDOW_WIDTH, WINDOW_HEIGHT), settings);
 }
